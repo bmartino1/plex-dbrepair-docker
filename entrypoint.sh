@@ -73,12 +73,12 @@ log_user 0
 log_file -a $env(LOG_FILE)
 
 spawn bash -lc "
-  echo '\\[DBREPAIR\\] started at '\"\$(date)\";
+  echo 'DBREPAIR: started at '\"\$(date)\";
 
   # Heartbeat loop
   (
     while true; do
-      echo '\\[DBREPAIR\\] heartbeat at '\"\$(date)\" 'interval='\"\$HEARTBEAT_INTERVAL\"'s';
+      echo 'DBREPAIR: heartbeat at '\"\$(date)\" 'interval='\"\$HEARTBEAT_INTERVAL\"'s';
       sleep \"\$HEARTBEAT_INTERVAL\";
     done
   ) &
@@ -91,8 +91,8 @@ spawn bash -lc "
   # Stop heartbeat
   kill \$HB_PID 2>/dev/null || true
 
-  echo '\\[DBREPAIR\\] finished at '\"\$(date)\";
-  echo '\\[DBREPAIR\\] exit code '\"\$RC\";
+  echo 'DBREPAIR: finished at '\"\$(date)\";
+  echo 'DBREPAIR: exit code '\"\$RC\";
 
   exit \$RC
 "
