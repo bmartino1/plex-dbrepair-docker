@@ -16,7 +16,6 @@ RUN apt-get update && \
         util-linux \
         procps \
         gzip \
-        screen \
         mc \
         expect \
     && rm -rf /var/lib/apt/lists/*
