@@ -45,6 +45,7 @@ cd /opt/dbrepair
 : > "${LOG_FILE}"
 
 export DB_PATH
+export LOG_FILE
 
 # ======================================================
 # Inform on How to Connect!
@@ -57,7 +58,6 @@ echo "   docker exec -it plex-dbrepair screen -r ${SCREEN_NAME}"
 echo
 echo " Detach with: Ctrl+A then D"
 echo "=================================================="
-echo " Starting DBRepair script" 
 
 # ======================================================
 # Write EXPECT script (THIS CALLS DBREPAIR)
@@ -65,6 +65,9 @@ echo " Starting DBRepair script"
 cat >run.expect <<'EOF'
 set timeout -1
 log_user 1
+
+# Log everything to file AND screen
+log_file -a $env(LOG_FILE)
 
 spawn ./DBRepair.sh --db "$env(DB_PATH)"
 
@@ -95,5 +98,5 @@ chmod +x run.expect
 # Launch SCREEN and RUN DBREPAIR (EXPLICIT)
 # ======================================================
 echo " Starting DBRepair inside screen"
-exec screen -S "${SCREEN_NAME}" \
-    expect ./run.expect 2>&1 | tee -a "${LOG_FILE}"
+
+exec screen -S "${SCREEN_NAME}" expect ./run.expect
