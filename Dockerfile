@@ -18,6 +18,7 @@ RUN apt-get update && \
         gzip \
         screen \
         mc \
+        expect \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/dbrepair
