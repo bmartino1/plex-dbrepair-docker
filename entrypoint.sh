@@ -22,6 +22,7 @@ echo " Plex DB Dir : ${PLEX_DB_DIR}"
 echo " Database    : ${PLEX_DB_FILE}"
 echo " DB Path     : ${DB_PATH}"
 echo " Heartbeat   : every ${HEARTBEAT_INTERVAL}s"
+echo " Mode        : automatic (menu option 2)"
 echo "=================================================="
 
 # ======================================================
@@ -69,24 +70,26 @@ cat >run.expect <<'EOF'
 set timeout -1
 log_user 0
 
-# Log everything to file only
+# Log everything ONLY to file
 log_file -a $env(LOG_FILE)
 
+# ------------------------------------------------------
+# Spawn DBRepair with heartbeat
+# ------------------------------------------------------
 spawn bash -lc "
   echo 'DBREPAIR: started at '\"\$(date)\";
 
   # Heartbeat loop
   (
     while true; do
-      echo 'DBREPAIR: heartbeat at '"$(date)"' interval='"$HEARTBEAT_INTERVAL"'s';
+      echo 'DBREPAIR: heartbeat at '\"\$(date)\" 'interval='\"\$HEARTBEAT_INTERVAL\"'s';
       echo 'DBREPAIR: Be patient, this can take a while...';
-      sleep "$HEARTBEAT_INTERVAL";
+      sleep \"\$HEARTBEAT_INTERVAL\";
     done
   ) &
-  HB_PID=$!
+  HB_PID=\$!
 
-
-  # Run DBRepair
+  # Run DBRepair (menu-driven)
   stdbuf -oL -eL ./DBRepair.sh --db '$env(DB_PATH)';
   RC=\$?
 
@@ -95,13 +98,39 @@ spawn bash -lc "
 
   echo 'DBREPAIR: finished at '\"\$(date)\";
   echo 'DBREPAIR: exit code '\"\$RC\";
-  
+
   exit \$RC
 "
 
-# Capture DBRepair exit code
+# ------------------------------------------------------
+# Expect state machine
+# ------------------------------------------------------
 set exit_status 0
 expect {
+    # MAIN MENU → automatic
+    -re {Enter selection:} {
+        send "2\r"
+        exp_continue
+    }
+
+    # Generic confirmations
+    -re {Continue.*\[y/N\]} {
+        send "y\r"
+        exp_continue
+    }
+
+    -re {Proceed.*\[y/N\]} {
+        send "y\r"
+        exp_continue
+    }
+
+    # Enter-only pauses
+    -re {Press.*Enter} {
+        send "\r"
+        exp_continue
+    }
+
+    # End of program
     eof {
         catch wait result
         set exit_status [lindex $result 3]
@@ -116,7 +145,7 @@ chmod +x run.expect
 # ======================================================
 # Run DBRepair (expect is PID 1)
 # ======================================================
-echo " Starting DBRepair via expect"
+echo " Starting DBRepair in AUTOMATIC mode"
 echo " You can follow progress with: docker logs -f plex-dbrepair"
 echo " Be Patient, this can take a while!"
 exec expect ./run.expect
