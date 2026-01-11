@@ -48,7 +48,7 @@ export DB_PATH
 export LOG_FILE
 
 # ======================================================
-# Inform on How to Connect!
+# Inform on How to Connect! and run!
 # ======================================================
 echo
 echo "=================================================="
@@ -69,25 +69,45 @@ log_user 1
 # Log everything to file AND screen
 log_file -a $env(LOG_FILE)
 
+# Start DBRepair (REAL TTY via screen)
 spawn ./DBRepair.sh --db "$env(DB_PATH)"
 
+# ======================================================
+# DBRepair Prompt Handling
+# ======================================================
+
 expect {
-    -re "Plex Media Server.*running" {
+    # Plex is running warning
+    -re {Plex Media Server.*running.*Continue.*\[y/N\]} {
         send "y\r"
         exp_continue
     }
-    -re "Do you want to continue" {
+
+    # Generic Continue (y/N)?
+    -re {Continue.*\[y/N\]} {
         send "y\r"
         exp_continue
     }
-    -re "Proceed.*repair" {
+
+    # Proceed with repair
+    -re {Proceed.*\[y/N\]} {
         send "y\r"
         exp_continue
     }
-    -re "Press.*Enter" {
+
+    # Enter-only pause
+    -re {Press Enter to continue} {
         send "\r"
         exp_continue
     }
+
+    # Some versions say just "Press Enter"
+    -re {Press.*Enter} {
+        send "\r"
+        exp_continue
+    }
+
+    # Normal completion
     eof
 }
 EOF
@@ -97,6 +117,6 @@ chmod +x run.expect
 # ======================================================
 # Launch SCREEN and RUN DBREPAIR (EXPLICIT)
 # ======================================================
-echo " Starting DBRepair inside screen"
+echo " Starting DBRepair script inside screen ${SCREEN_NAME}"
 
 exec screen -S "${SCREEN_NAME}" expect ./run.expect
