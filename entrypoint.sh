@@ -8,9 +8,24 @@ set -euo pipefail
 : "${PLEX_DB_FILE:=com.plexapp.plugins.library.db}"
 : "${LOG_DIR:=/logs}"
 : "${HEARTBEAT_INTERVAL:=120}"
+: "${DBREPAIR_MODE:=automatic}"
 
 DB_PATH="${PLEX_DB_DIR}/${PLEX_DB_FILE}"
 LOG_FILE="${LOG_DIR}/dbrepair.log"
+
+# ======================================================
+# Map DBREPAIR_MODE → menu selection
+# ======================================================
+case "${DBREPAIR_MODE}" in
+  automatic) MENU_SELECTION="2" ;;
+  check)     MENU_SELECTION="3" ;;
+  repair)    MENU_SELECTION="5" ;;
+  *)
+    echo "ERROR: Invalid DBREPAIR_MODE='${DBREPAIR_MODE}'"
+    echo "Valid values: automatic | check | repair"
+    exit 1
+    ;;
+esac
 
 # ======================================================
 # Banner
@@ -18,11 +33,11 @@ LOG_FILE="${LOG_DIR}/dbrepair.log"
 echo "=================================================="
 echo " Plex DBRepair Container"
 echo "=================================================="
-echo " Plex DB Dir : ${PLEX_DB_DIR}"
-echo " Database    : ${PLEX_DB_FILE}"
-echo " DB Path     : ${DB_PATH}"
-echo " Heartbeat   : every ${HEARTBEAT_INTERVAL}s"
-echo " Mode        : automatic (menu option 2)"
+echo " Plex DB Dir     : ${PLEX_DB_DIR}"
+echo " Database        : ${PLEX_DB_FILE}"
+echo " DB Path         : ${DB_PATH}"
+echo " Mode            : ${DBREPAIR_MODE} (menu ${MENU_SELECTION})"
+echo " Heartbeat       : every ${HEARTBEAT_INTERVAL}s"
 echo "=================================================="
 
 # ======================================================
@@ -51,9 +66,10 @@ rm -f "${LOG_FILE}"
 export DB_PATH
 export LOG_FILE
 export HEARTBEAT_INTERVAL
+export MENU_SELECTION
 
 # ======================================================
-# Mirror log file to Docker stdout
+# Mirror log file → Docker logs
 # ======================================================
 tail -n 0 -F "${LOG_FILE}" &
 TAIL_PID=$!
@@ -89,7 +105,7 @@ spawn bash -lc "
   ) &
   HB_PID=\$!
 
-  # Run DBRepair (menu-driven)
+  # Run DBRepair
   stdbuf -oL -eL ./DBRepair.sh --db '$env(DB_PATH)';
   RC=\$?
 
@@ -107,9 +123,9 @@ spawn bash -lc "
 # ------------------------------------------------------
 set exit_status 0
 expect {
-    # MAIN MENU → automatic
+    # Main menu selection
     -re {Enter selection:} {
-        send "2\r"
+        send "$env(MENU_SELECTION)\r"
         exp_continue
     }
 
@@ -145,7 +161,7 @@ chmod +x run.expect
 # ======================================================
 # Run DBRepair (expect is PID 1)
 # ======================================================
-echo " Starting DBRepair in AUTOMATIC mode"
-echo " You can follow progress with: docker logs -f plex-dbrepair"
+echo " Starting DBRepair (mode=${DBREPAIR_MODE})"
+echo " Follow progress with: docker logs -f plex-dbrepair"
 echo " Be Patient, this can take a while!"
 exec expect ./run.expect
