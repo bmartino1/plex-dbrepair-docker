@@ -46,7 +46,7 @@ export DB_PATH
 export LOG_FILE
 
 # ======================================================
-# Write EXPECT script (THIS CALLS DBREPAIR)
+# Write EXPECT script (PID 1 controller)
 # ======================================================
 cat >run.expect <<'EOF'
 set timeout -1
@@ -55,12 +55,12 @@ log_user 1
 # Log everything to file
 log_file -a $env(LOG_FILE)
 
-# Force line-buffered output through PTY
+# Spawn DBRepair with forced line-buffered output
 spawn bash -lc "stdbuf -oL -eL ./DBRepair.sh --db '$env(DB_PATH)'"
 
-# ======================================================
-# DBRepair Prompt Handling (based on actual script)
-# ======================================================
+# Track child exit
+set exit_status 0
+
 expect {
     -re {Plex Media Server.*running.*Continue.*\[y/N\]} {
         send "y\r"
@@ -77,18 +77,19 @@ expect {
         exp_continue
     }
 
-    -re {Press Enter to continue} {
-        send "\r"
-        exp_continue
-    }
-
     -re {Press.*Enter} {
         send "\r"
         exp_continue
     }
 
-    eof
+    eof {
+        catch wait result
+        set exit_status [lindex $result 3]
+    }
 }
+
+# Explicitly exit PID 1 with DBRepair's exit code
+exit $exit_status
 EOF
 
 chmod +x run.expect
@@ -97,4 +98,5 @@ chmod +x run.expect
 # Run DBRepair (expect is PID 1)
 # ======================================================
 echo " Starting DBRepair via expect"
+echo " Be Patient, this can take a While!"
 exec expect ./run.expect
