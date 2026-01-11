@@ -16,6 +16,8 @@ RUN apt-get update && \
         util-linux \
         procps \
         gzip \
+        screen \
+        mc \
     && rm -rf /var/lib/apt/lists/*
 
 # Working directory
