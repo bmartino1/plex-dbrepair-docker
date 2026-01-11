@@ -7,7 +7,6 @@ set -euo pipefail
 : "${PLEX_DB_DIR:=/plexdb}"
 : "${PLEX_DB_FILE:=com.plexapp.plugins.library.db}"
 : "${LOG_DIR:=/logs}"
-: "${SCREEN_NAME:=db}"
 
 DB_PATH="${PLEX_DB_DIR}/${PLEX_DB_FILE}"
 LOG_FILE="${LOG_DIR}/dbrepair.log"
@@ -21,7 +20,6 @@ echo "=================================================="
 echo " Plex DB Dir : ${PLEX_DB_DIR}"
 echo " Database    : ${PLEX_DB_FILE}"
 echo " DB Path     : ${DB_PATH}"
-echo " Screen Name : ${SCREEN_NAME}"
 echo "=================================================="
 
 # ======================================================
@@ -48,66 +46,47 @@ export DB_PATH
 export LOG_FILE
 
 # ======================================================
-# Inform on How to Connect! and run!
-# ======================================================
-echo
-echo "=================================================="
-echo
-echo " Attach with:"
-echo "   docker exec -it plex-dbrepair screen -r ${SCREEN_NAME}"
-echo
-echo " Detach with: Ctrl+A then D"
-echo "=================================================="
-
-# ======================================================
 # Write EXPECT script (THIS CALLS DBREPAIR)
 # ======================================================
 cat >run.expect <<'EOF'
 set timeout -1
 log_user 1
 
-# Log everything to file AND screen
+# Log everything
 log_file -a $env(LOG_FILE)
 
-# Start DBRepair (REAL TTY via screen)
+# Spawn DBRepair with a real PTY
 spawn ./DBRepair.sh --db "$env(DB_PATH)"
 
 # ======================================================
-# DBRepair Prompt Handling
+# DBRepair Prompt Handling (based on actual script)
 # ======================================================
-
 expect {
-    # Plex is running warning
     -re {Plex Media Server.*running.*Continue.*\[y/N\]} {
         send "y\r"
         exp_continue
     }
 
-    # Generic Continue (y/N)?
     -re {Continue.*\[y/N\]} {
         send "y\r"
         exp_continue
     }
 
-    # Proceed with repair
     -re {Proceed.*\[y/N\]} {
         send "y\r"
         exp_continue
     }
 
-    # Enter-only pause
     -re {Press Enter to continue} {
         send "\r"
         exp_continue
     }
 
-    # Some versions say just "Press Enter"
     -re {Press.*Enter} {
         send "\r"
         exp_continue
     }
 
-    # Normal completion
     eof
 }
 EOF
@@ -115,8 +94,7 @@ EOF
 chmod +x run.expect
 
 # ======================================================
-# Launch SCREEN and RUN DBREPAIR (EXPLICIT)
+# Run DBRepair (expect is PID 1)
 # ======================================================
-echo " Starting DBRepair script inside screen ${SCREEN_NAME}"
-
-exec screen -S "${SCREEN_NAME}" expect ./run.expect
+echo " Starting DBRepair via expect"
+exec expect ./run.expect
