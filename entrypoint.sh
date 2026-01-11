@@ -52,11 +52,11 @@ cat >run.expect <<'EOF'
 set timeout -1
 log_user 1
 
-# Log everything
+# Log everything to file
 log_file -a $env(LOG_FILE)
 
-# Spawn DBRepair with a real PTY
-spawn ./DBRepair.sh --db "$env(DB_PATH)"
+# Force line-buffered output through PTY
+spawn bash -lc "stdbuf -oL -eL ./DBRepair.sh --db '$env(DB_PATH)'"
 
 # ======================================================
 # DBRepair Prompt Handling (based on actual script)
