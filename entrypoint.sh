@@ -66,16 +66,17 @@ cat >run.expect <<'EOF'
 set timeout -1
 log_user 0
 
-# Log everything to file ONLY
+# Log everything to file only
 log_file -a $env(LOG_FILE)
 
+# Spawn DBRepair with heartbeat and forced line buffering
 spawn bash -lc "
-  echo '[DBREPAIR] started at '\"\$(date)\";
+  echo '\\[DBREPAIR\\] started at '\"\$(date)\";
 
   # Heartbeat loop
   (
     while true; do
-      echo '[DBREPAIR] heartbeat at '\"\$(date)\" 'interval='\"\$HEARTBEAT_INTERVAL\"'s';
+      echo '\\[DBREPAIR\\] heartbeat at '\"\$(date)\" 'interval='\"\$HEARTBEAT_INTERVAL\"'s';
       sleep \"\$HEARTBEAT_INTERVAL\";
     done
   ) &
@@ -88,8 +89,8 @@ spawn bash -lc "
   # Stop heartbeat
   kill \$HB_PID 2>/dev/null || true
 
-  echo '[DBREPAIR] finished at '\"\$(date)\";
-  echo '[DBREPAIR] exit code '\"\$RC\";
+  echo '\\[DBREPAIR\\] finished at '\"\$(date)\";
+  echo '\\[DBREPAIR\\] exit code '\"\$RC\";
 
   exit \$RC
 "
@@ -103,6 +104,7 @@ expect {
     }
 }
 
+# Exit PID 1 with DBRepair exit code
 exit $exit_status
 EOF
 
@@ -113,5 +115,5 @@ chmod +x run.expect
 # ======================================================
 echo " Starting DBRepair via expect"
 echo " You can follow progress with: docker logs -f plex-dbrepair"
-echo " Be Patient, this can take a While!"
+echo " Be Patient, this can take a while!"
 exec expect ./run.expect
