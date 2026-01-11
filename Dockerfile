@@ -20,16 +20,13 @@ RUN apt-get update && \
         mc \
     && rm -rf /var/lib/apt/lists/*
 
-# Working directory
 WORKDIR /opt/dbrepair
 
-# Download DBRepair.sh (release version)
 RUN curl -fsSL \
     https://raw.githubusercontent.com/ChuckPa/DBRepair/refs/heads/master/DBRepair.sh \
     -o DBRepair.sh && \
     chmod +x DBRepair.sh
 
-# Copy entrypoint
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
