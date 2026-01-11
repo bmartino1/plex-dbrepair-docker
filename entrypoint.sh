@@ -42,6 +42,9 @@ fi
 # ======================================================
 mkdir -p "${LOG_DIR}"
 cd /opt/dbrepair
+
+# Hard reset log file every run
+rm -f "${LOG_FILE}"
 : > "${LOG_FILE}"
 
 export DB_PATH
@@ -51,7 +54,7 @@ export HEARTBEAT_INTERVAL
 # ======================================================
 # Mirror log file to Docker stdout
 # ======================================================
-tail -F "${LOG_FILE}" &
+tail -n 0 -F "${LOG_FILE}" &
 TAIL_PID=$!
 
 cleanup() {
@@ -69,7 +72,6 @@ log_user 0
 # Log everything to file only
 log_file -a $env(LOG_FILE)
 
-# Spawn DBRepair with heartbeat and forced line buffering
 spawn bash -lc "
   echo '\\[DBREPAIR\\] started at '\"\$(date)\";
 
@@ -104,7 +106,6 @@ expect {
     }
 }
 
-# Exit PID 1 with DBRepair exit code
 exit $exit_status
 EOF
 
