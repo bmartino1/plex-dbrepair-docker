@@ -2,19 +2,21 @@
 set -euo pipefail
 
 # ======================================================
-# Plex DBRepair – SCREEN DEBUG (interactive-safe)
+# Configuration
 # ======================================================
-
 : "${PLEX_DB_DIR:=/plexdb}"
 : "${PLEX_DB_FILE:=com.plexapp.plugins.library.db}"
 : "${LOG_DIR:=/logs}"
-: "${SCREEN_NAME:=dbrepair}"
+: "${SCREEN_NAME:=db}"
 
 DB_PATH="${PLEX_DB_DIR}/${PLEX_DB_FILE}"
 LOG_FILE="${LOG_DIR}/dbrepair.log"
 
+# ======================================================
+# Banner
+# ======================================================
 echo "=================================================="
-echo " Plex DBRepair Container (screen debug mode)"
+echo " Plex DBRepair Container"
 echo "=================================================="
 echo " Plex DB Dir : ${PLEX_DB_DIR}"
 echo " Database    : ${PLEX_DB_FILE}"
@@ -22,9 +24,9 @@ echo " DB Path     : ${DB_PATH}"
 echo " Screen Name : ${SCREEN_NAME}"
 echo "=================================================="
 
-# -------------------------
+# ======================================================
 # Safety checks
-# -------------------------
+# ======================================================
 if [[ ! -d "${PLEX_DB_DIR}" ]]; then
     echo "ERROR: Plex DB directory not found"
     exit 1
@@ -35,46 +37,63 @@ if [[ ! -f "${DB_PATH}" ]]; then
     exit 1
 fi
 
+# ======================================================
+# Prep filesystem
+# ======================================================
 mkdir -p "${LOG_DIR}"
 cd /opt/dbrepair
 : > "${LOG_FILE}"
 
+export DB_PATH
+
+# ======================================================
+# Inform on How to Connect!
+# ======================================================
 echo
 echo "=================================================="
-echo " Screen session starting."
 echo
 echo " Attach with:"
 echo "   docker exec -it plex-dbrepair screen -r ${SCREEN_NAME}"
 echo
 echo " Detach with: Ctrl+A then D"
 echo "=================================================="
+echo " Starting DBRepair script" 
 
-# -------------------------
-# Start screen with shell
-# -------------------------
-echo "Launching screen session..."
+# ======================================================
+# Write EXPECT script (THIS CALLS DBREPAIR)
+# ======================================================
+cat >run.expect <<'EOF'
+set timeout -1
+log_user 1
 
-screen -S "${SCREEN_NAME}" -dm bash
+spawn ./DBRepair.sh --db "$env(DB_PATH)"
 
-# Give screen time to initialize
-sleep 1
+expect {
+    -re "Plex Media Server.*running" {
+        send "y\r"
+        exp_continue
+    }
+    -re "Do you want to continue" {
+        send "y\r"
+        exp_continue
+    }
+    -re "Proceed.*repair" {
+        send "y\r"
+        exp_continue
+    }
+    -re "Press.*Enter" {
+        send "\r"
+        exp_continue
+    }
+    eof
+}
+EOF
 
-# -------------------------
-# Inject commands into screen
-# -------------------------
-screen -S "${SCREEN_NAME}" -X stuff $'echo "Starting DBRepair..."\n'
-screen -S "${SCREEN_NAME}" -X stuff $'pwd\n'
-screen -S "${SCREEN_NAME}" -X stuff $'ls -lh DBRepair.sh\n'
+chmod +x run.expect
 
-screen -S "${SCREEN_NAME}" -X stuff \
-$'stdbuf -oL -eL ./DBRepair.sh --db "'"${DB_PATH}"'" 2>&1 | tee -a "'"${LOG_FILE}"'"\n'
-
-
-# -------------------------
-# Keep container alive
-# -------------------------
-while screen -list | grep -q "${SCREEN_NAME}"; do
-    sleep 5
-done
-
-echo "DBRepair finished. Exiting container."
+# ======================================================
+# Launch SCREEN and RUN DBREPAIR (EXPLICIT)
+# ======================================================
+echo " Starting DBRepair inside screen"
+exec screen -S "${SCREEN_NAME}" \
+    expect ./run.expect 2>&1 | tee -a "${LOG_FILE}"
