@@ -78,11 +78,13 @@ spawn bash -lc "
   # Heartbeat loop
   (
     while true; do
-      echo 'DBREPAIR: heartbeat at '\"\$(date)\" 'interval='\"\$HEARTBEAT_INTERVAL\"'s';
-      sleep \"\$HEARTBEAT_INTERVAL\";
+      echo 'DBREPAIR: heartbeat at '"$(date)"' interval='"$HEARTBEAT_INTERVAL"'s';
+      echo 'DBREPAIR: Be patient, this can take a while...';
+      sleep "$HEARTBEAT_INTERVAL";
     done
   ) &
-  HB_PID=\$!
+  HB_PID=$!
+
 
   # Run DBRepair
   stdbuf -oL -eL ./DBRepair.sh --db '$env(DB_PATH)';
@@ -93,7 +95,7 @@ spawn bash -lc "
 
   echo 'DBREPAIR: finished at '\"\$(date)\";
   echo 'DBREPAIR: exit code '\"\$RC\";
-
+  
   exit \$RC
 "
 
