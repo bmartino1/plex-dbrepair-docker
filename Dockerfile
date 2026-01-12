@@ -7,7 +7,7 @@ LABEL org.opencontainers.image.source="https://github.com/ChuckPa/DBRepair"
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ======================================================
-# Runtime dependencies (including docker-cli)
+# Runtime dependencies (Docker CLI via docker.io)
 # ======================================================
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -19,7 +19,7 @@ RUN apt-get update && \
         util-linux \
         procps \
         gzip \
-        docker-ce-cli \
+        docker.io \
     && rm -rf /var/lib/apt/lists/*
 
 # ======================================================
