@@ -19,7 +19,7 @@ RUN apt-get update && \
         util-linux \
         procps \
         gzip \
-        docker-cli \
+        docker-ce-cli \
     && rm -rf /var/lib/apt/lists/*
 
 # ======================================================
