@@ -19,7 +19,7 @@ DB_PATH="${PLEX_DB_DIR}/${PLEX_DB_FILE}"
 LOGFILE="${LOG_DIR}/dbrepair.log"
 
 # ======================================================
-# Map mode → DBRepair scripted command
+# Map mode → DBRepair scripted command (DOCUMENTED)
 # ======================================================
 case "${DBREPAIR_MODE}" in
   automatic) MODE_CMD="auto" ;;
@@ -53,7 +53,7 @@ echo "=================================================="
 # ======================================================
 [[ -d "${PLEX_DB_DIR}" ]] || { echo "ERROR: Plex DB directory missing"; exit 1; }
 [[ -f "${DB_PATH}" ]]     || { echo "ERROR: Plex DB file missing"; exit 1; }
-[[ -x "${SQLITE_BIN}" ]]  || { echo "ERROR: sqlite binary missing"; exit 1; }
+[[ -x "${SQLITE_BIN}" ]]  || { echo "ERROR: sqlite3 binary missing"; exit 1; }
 [[ -S /var/run/docker.sock ]] || { echo "ERROR: docker.sock not mounted"; exit 1; }
 
 mkdir -p "${LOG_DIR}"
@@ -63,24 +63,27 @@ cd /opt/dbrepair
 : > "${LOGFILE}"
 
 # ======================================================
-# Stop Plex containers (except this one)
+# STOP ALL PLEX CONTAINERS (EXCEPT THIS ONE)
 # ======================================================
 echo "Stopping Plex containers..." | tee -a "${LOGFILE}"
 
-SELF_ID="$(hostname)"
+SELF_CID="$(cat /proc/self/cgroup | grep docker | head -n1 | sed 's#.*/##')"
 
-docker ps --format '{{.ID}} {{.Names}}' \
+docker ps --format '{{.ID}} {{.Names}} {{.Image}}' \
 | grep -i "${PLEX_CONTAINER_NAME}" \
-| awk '{print $1}' \
-| while read -r CID; do
-    if [[ "${CID}" != "${SELF_ID}" ]]; then
-      echo "Stopping Plex container ${CID}" | tee -a "${LOGFILE}"
+| while read -r CID NAME IMAGE; do
+    if [[ "${CID}" != "${SELF_CID}" ]]; then
+      echo "Disabling restart + stopping Plex container: ${NAME} (${CID})" \
+        | tee -a "${LOGFILE}"
+      docker update --restart=no "${CID}" >/dev/null 2>&1 || true
       docker stop "${CID}" || true
     fi
   done
 
+echo "All Plex containers stopped." | tee -a "${LOGFILE}"
+
 # ======================================================
-# Build DBRepair argument list
+# Build DBRepair argument list (SCRIPTED MODE)
 # ======================================================
 DBREPAIR_ARGS=(
   "--sqlite" "${SQLITE_BIN}"
@@ -93,7 +96,7 @@ DBREPAIR_ARGS+=( "${MODE_CMD}" )
 DBREPAIR_ARGS+=( "exit" )
 
 # ======================================================
-# Heartbeat (Docker log + logfile)
+# Heartbeat (stdout + logfile)
 # ======================================================
 heartbeat() {
   while true; do
@@ -108,7 +111,7 @@ HB_PID=$!
 trap 'kill ${HB_PID} 2>/dev/null || true' EXIT
 
 # ======================================================
-# Run DBRepair (SCRIPTED MODE, PTY REQUIRED)
+# Run DBRepair (REAL TTY, SCRIPTED MODE)
 # ======================================================
 export Scripted=1
 export LOGFILE
