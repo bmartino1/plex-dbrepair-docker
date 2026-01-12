@@ -13,7 +13,6 @@ set -euo pipefail
 : "${DBREPAIR_UPDATE:=false}"       # true | false
 : "${SHOW_LOG:=true}"               # true | false
 : "${HEARTBEAT_INTERVAL:=300}"      # seconds
-: "${PLEX_CONTAINER_NAME:=plex}"    # match plex containers
 
 DB_PATH="${PLEX_DB_DIR}/${PLEX_DB_FILE}"
 LOGFILE="${LOG_DIR}/dbrepair.log"
@@ -40,6 +39,7 @@ esac
 echo "=================================================="
 echo " Plex DBRepair Docker"
 echo "=================================================="
+echo " Plex DB Dir    : ${PLEX_DB_DIR}"
 echo " DB Path        : ${DB_PATH}"
 echo " Mode           : ${DBREPAIR_MODE}"
 echo " Update Script  : ${DBREPAIR_UPDATE}"
@@ -59,28 +59,36 @@ echo "=================================================="
 mkdir -p "${LOG_DIR}"
 cd /opt/dbrepair
 
-# Reset logfile every run
+# Reset log every run
 : > "${LOGFILE}"
 
 # ======================================================
-# STOP ALL PLEX CONTAINERS (EXCEPT THIS ONE)
+# STOP ALL PLEX INSTANCES (containers + stray processes)
 # ======================================================
-echo "Stopping Plex containers..." | tee -a "${LOGFILE}"
+echo "Stopping ALL Plex instances..." | tee -a "${LOGFILE}"
 
-SELF_CID="$(cat /proc/self/cgroup | grep docker | head -n1 | sed 's#.*/##')"
+SELF_CID="$(awk -F/ '/docker/{print $NF; exit}' /proc/self/cgroup)"
 
 docker ps --format '{{.ID}} {{.Names}} {{.Image}}' \
-| grep -i "${PLEX_CONTAINER_NAME}" \
+| grep -i plex \
 | while read -r CID NAME IMAGE; do
     if [[ "${CID}" != "${SELF_CID}" ]]; then
-      echo "Disabling restart + stopping Plex container: ${NAME} (${CID})" \
+      echo "Stopping Plex container: ${NAME} (${CID})" \
         | tee -a "${LOGFILE}"
       docker update --restart=no "${CID}" >/dev/null 2>&1 || true
-      docker stop "${CID}" || true
+      docker stop "${CID}" >/dev/null 2>&1 || true
     fi
   done
 
-echo "All Plex containers stopped." | tee -a "${LOGFILE}"
+if pgrep -f "Plex Media Server" >/dev/null 2>&1; then
+  echo "Killing stray Plex Media Server processes..." \
+    | tee -a "${LOGFILE}"
+  pkill -TERM -f "Plex Media Server" || true
+  sleep 3
+  pkill -9 -f "Plex Media Server" || true
+fi
+
+echo "Plex shutdown complete." | tee -a "${LOGFILE}"
 
 # ======================================================
 # Build DBRepair argument list (SCRIPTED MODE)
@@ -96,7 +104,7 @@ DBREPAIR_ARGS+=( "${MODE_CMD}" )
 DBREPAIR_ARGS+=( "exit" )
 
 # ======================================================
-# Heartbeat (stdout + logfile)
+# Heartbeat (runs WHILE DBRepair executes)
 # ======================================================
 heartbeat() {
   while true; do
@@ -105,10 +113,6 @@ heartbeat() {
     sleep "${HEARTBEAT_INTERVAL}"
   done
 }
-
-heartbeat &
-HB_PID=$!
-trap 'kill ${HB_PID} 2>/dev/null || true' EXIT
 
 # ======================================================
 # Run DBRepair (REAL TTY, SCRIPTED MODE)
@@ -121,6 +125,9 @@ echo "DBREPAIR COMMAND:" | tee -a "${LOGFILE}"
 echo "  ./DBRepair.sh ${DBREPAIR_ARGS[*]}" | tee -a "${LOGFILE}"
 echo "--------------------------------------------------" | tee -a "${LOGFILE}"
 
+heartbeat &
+HB_PID=$!
+
 set +e
 script -q -e -c \
   "stdbuf -oL -eL ./DBRepair.sh ${DBREPAIR_ARGS[*]}" \
@@ -128,6 +135,8 @@ script -q -e -c \
   2>&1 | tee -a "${LOGFILE}"
 RC=${PIPESTATUS[0]}
 set -e
+
+kill "${HB_PID}" 2>/dev/null || true
 
 echo "--------------------------------------------------" | tee -a "${LOGFILE}"
 echo "DBRepair finished with exit code ${RC}" | tee -a "${LOGFILE}"
