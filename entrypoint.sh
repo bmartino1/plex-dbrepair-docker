@@ -8,7 +8,7 @@ set -euo pipefail
 : "${PLEX_DB_FILE:=com.plexapp.plugins.library.db}"
 : "${LOG_DIR:=/logs}"
 
-: "${DBREPAIR_MODE:=automatic}"   # automatic | check | vacuum | repair | reindex
+: "${DBREPAIR_MODE:=automatic}"    # automatic | check | vacuum | repair | reindex
 : "${SHOW_LOG:=true}"              # true | false
 : "${HEARTBEAT_INTERVAL:=300}"     # seconds (default 5 minutes)
 
@@ -63,7 +63,7 @@ fi
 mkdir -p "${LOG_DIR}"
 cd /opt/dbrepair
 
-# Hard reset Docker log file every run
+# Reset Docker-visible log every run
 rm -f "${DockerLOG_FILE}"
 : > "${DockerLOG_FILE}"
 
@@ -85,7 +85,9 @@ trap "kill ${TAIL_PID} 2>/dev/null || true" EXIT
 # ======================================================
 cat >run.expect <<'EOF'
 set timeout -1
-log_user 0
+
+# IMPORTANT: SHOW INTERACTIVE OUTPUT
+log_user 1
 log_file -a $env(DockerLOG_FILE)
 
 # Start DBRepair under a real PTY
@@ -97,7 +99,7 @@ set sent_show 0
 set sent_exit 0
 
 # ------------------------------------------------------
-# Heartbeat loop (FIXED)
+# Heartbeat loop (background, visible in logs)
 # ------------------------------------------------------
 set hb_pid [exec sh -c "
   INTERVAL='$env(HEARTBEAT_INTERVAL)';
@@ -114,14 +116,14 @@ set hb_pid [exec sh -c "
 expect {
   -re {Enter command #.*:} {
 
-    # 1) Run requested operation
+    # 1) Run selected DBRepair operation
     if { $sent_mode == 0 } {
       send \"$env(MODE_CMD)\r\"
       set sent_mode 1
       exp_continue
     }
 
-    # 2) Show DBRepair internal log (menu 10)
+    # 2) Show DBRepair internal logfile (menu 10)
     if { $env(SHOW_LOG) == \"true\" && $sent_show == 0 } {
       send \"10\r\"
       set sent_show 1
@@ -136,7 +138,7 @@ expect {
     }
   }
 
-  # Cleanup prompt after 99
+  # Cleanup confirmation after exit
   -re {Ok to remove temporary.*\(Y/N\).*} {
     send \"Y\r\"
     exp_continue
