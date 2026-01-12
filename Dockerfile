@@ -6,6 +6,9 @@ LABEL org.opencontainers.image.source="https://github.com/ChuckPa/DBRepair"
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# ======================================================
+# Runtime dependencies ONLY
+# ======================================================
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         bash \
@@ -16,10 +19,11 @@ RUN apt-get update && \
         util-linux \
         procps \
         gzip \
-        mc \
-        expect \
     && rm -rf /var/lib/apt/lists/*
 
+# ======================================================
+# DBRepair setup
+# ======================================================
 WORKDIR /opt/dbrepair
 
 RUN curl -fsSL \
@@ -27,6 +31,9 @@ RUN curl -fsSL \
     -o DBRepair.sh && \
     chmod +x DBRepair.sh
 
+# ======================================================
+# Entrypoint
+# ======================================================
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
