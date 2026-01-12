@@ -8,9 +8,9 @@ set -euo pipefail
 : "${PLEX_DB_FILE:=com.plexapp.plugins.library.db}"
 : "${LOG_DIR:=/logs}"
 
-: "${DBREPAIR_MODE:=automatic}"    # automatic | check | vacuum | repair | reindex
-: "${SHOW_LOG:=true}"              # true | false
-: "${HEARTBEAT_INTERVAL:=300}"     # seconds (default 5 minutes)
+: "${DBREPAIR_MODE:=automatic}"   # automatic | check | vacuum | repair | reindex
+: "${SHOW_LOG:=true}"             # true | false
+: "${HEARTBEAT_INTERVAL:=300}"    # seconds (default 5 minutes)
 
 DB_PATH="${PLEX_DB_DIR}/${PLEX_DB_FILE}"
 DOCKER_LOG_FILE="${LOG_DIR}/dbrepair.log"
@@ -25,7 +25,7 @@ case "${DBREPAIR_MODE}" in
   repair)    MODE_CMD="5" ;;
   reindex)   MODE_CMD="6" ;;
   *)
-    echo "WARNING: Invalid DBREPAIR_MODE='${DBREPAIR_MODE}', falling back to 'automatic'"
+    echo "WARNING: Invalid DBREPAIR_MODE='${DBREPAIR_MODE}', defaulting to automatic"
     MODE_CMD="2"
     DBREPAIR_MODE="automatic"
     ;;
@@ -47,15 +47,8 @@ echo "=================================================="
 # ======================================================
 # Safety checks
 # ======================================================
-if [[ ! -d "${PLEX_DB_DIR}" ]]; then
-  echo "ERROR: Plex DB directory not found: ${PLEX_DB_DIR}"
-  exit 1
-fi
-
-if [[ ! -f "${DB_PATH}" ]]; then
-  echo "ERROR: Plex DB file not found: ${DB_PATH}"
-  exit 1
-fi
+[[ -d "${PLEX_DB_DIR}" ]] || { echo "ERROR: Plex DB dir missing"; exit 1; }
+[[ -f "${DB_PATH}" ]] || { echo "ERROR: Plex DB file missing"; exit 1; }
 
 # ======================================================
 # Prep filesystem
@@ -63,84 +56,55 @@ fi
 mkdir -p "${LOG_DIR}"
 cd /opt/dbrepair
 
-# Reset docker-visible log every run
-rm -f "${DOCKER_LOG_FILE}"
+# Reset docker-visible log
 : > "${DOCKER_LOG_FILE}"
 
-export DB_PATH
-export MODE_CMD
-export SHOW_LOG
-export HEARTBEAT_INTERVAL
-export DOCKER_LOG_FILE
-
 # ======================================================
-# Mirror DBRepair log → Docker stdout
-# ======================================================
-tail -n 0 -F "${DOCKER_LOG_FILE}" &
-TAIL_PID=$!
-trap "kill ${TAIL_PID} 2>/dev/null || true" EXIT
-
-# ======================================================
-# Write EXPECT controller (NO MENU MATCHING)
-# ======================================================
-cat >run.expect <<'EOF'
-set timeout -1
-
-# Show DBRepair output in docker logs
-log_user 1
-log_file -a $env(DOCKER_LOG_FILE)
-
-# Spawn DBRepair under PTY
-spawn bash -lc "stdbuf -oL -eL ./DBRepair.sh --db '$env(DB_PATH)'"
-
-# ------------------------------------------------------
 # Heartbeat (background)
-# ------------------------------------------------------
-set hb_pid [exec sh -c "
-  INTERVAL='$env(HEARTBEAT_INTERVAL)';
+# ======================================================
+heartbeat() {
   while true; do
-    echo \"DBREPAIR: heartbeat at \$(date) interval=\${INTERVAL}s\";
-    echo \"DBREPAIR: Be patient, this can take a while...\";
-    sleep \"\${INTERVAL}\";
+    echo "DBREPAIR: heartbeat at $(date) interval=${HEARTBEAT_INTERVAL}s"
+    echo "DBREPAIR: Be patient, this can take a while..."
+    sleep "${HEARTBEAT_INTERVAL}"
   done
-" &]
-
-# ------------------------------------------------------
-# Give DBRepair time to initialize UI
-# ------------------------------------------------------
-sleep 5
-
-# ------------------------------------------------------
-# Send command sequence (guaranteed)
-# ------------------------------------------------------
-send "$env(MODE_CMD)\r"
-sleep 1
-
-if { "$env(SHOW_LOG)" == "true" } {
-  send "10\r"
-  sleep 1
 }
 
-send "99\r"
-sleep 1
-send "Y\r"
+heartbeat >>"${DOCKER_LOG_FILE}" &
+HB_PID=$!
 
-# ------------------------------------------------------
-# Wait for DBRepair to exit
-# ------------------------------------------------------
-expect eof
-
-# Cleanup heartbeat
-exec kill $hb_pid 2>/dev/null
-
-# Exit container cleanly
-exit 0
-EOF
-
-chmod +x run.expect
+cleanup() {
+  kill "${HB_PID}" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 # ======================================================
-# Run DBRepair (expect is PID 1)
+# Build DBRepair command stream
 # ======================================================
-echo " Starting DBRepair"
-exec expect ./run.expect
+{
+  echo "${MODE_CMD}"
+
+  if [[ "${SHOW_LOG}" == "true" ]]; then
+    echo "10"
+  fi
+
+  echo "99"
+  echo "Y"
+} | tee /tmp/dbrepair.stdin
+
+# ======================================================
+# Run DBRepair (REAL execution)
+# ======================================================
+echo "Starting DBRepair..."
+echo "--------------------------------------------------"
+
+stdbuf -oL -eL ./DBRepair.sh --db "${DB_PATH}" \
+  < /tmp/dbrepair.stdin \
+  | tee -a "${DOCKER_LOG_FILE}"
+
+RC=${PIPESTATUS[0]}
+
+echo "--------------------------------------------------"
+echo "DBREPAIR: finished with exit code ${RC}"
+
+exit "${RC}"
