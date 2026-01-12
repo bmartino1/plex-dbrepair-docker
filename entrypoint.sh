@@ -13,7 +13,7 @@ set -euo pipefail
 : "${HEARTBEAT_INTERVAL:=300}"     # seconds (default 5 minutes)
 
 DB_PATH="${PLEX_DB_DIR}/${PLEX_DB_FILE}"
-DockerLOG_FILE="${LOG_DIR}/dbrepair.log"
+DOCKER_LOG_FILE="${LOG_DIR}/dbrepair.log"
 
 # ======================================================
 # Map DBREPAIR_MODE → DBRepair menu command
@@ -41,7 +41,7 @@ echo " DB Path        : ${DB_PATH}"
 echo " Mode           : ${DBREPAIR_MODE} (menu ${MODE_CMD})"
 echo " Show Log       : ${SHOW_LOG}"
 echo " Heartbeat      : every ${HEARTBEAT_INTERVAL}s"
-echo " Docker Log     : ${DockerLOG_FILE}"
+echo " Docker Log     : ${DOCKER_LOG_FILE}"
 echo "=================================================="
 
 # ======================================================
@@ -63,43 +63,38 @@ fi
 mkdir -p "${LOG_DIR}"
 cd /opt/dbrepair
 
-# Reset Docker-visible log every run
-rm -f "${DockerLOG_FILE}"
-: > "${DockerLOG_FILE}"
+# Reset docker-visible log every run
+rm -f "${DOCKER_LOG_FILE}"
+: > "${DOCKER_LOG_FILE}"
 
 export DB_PATH
 export MODE_CMD
 export SHOW_LOG
 export HEARTBEAT_INTERVAL
-export DockerLOG_FILE
+export DOCKER_LOG_FILE
 
 # ======================================================
 # Mirror DBRepair log → Docker stdout
 # ======================================================
-tail -n 0 -F "${DockerLOG_FILE}" &
+tail -n 0 -F "${DOCKER_LOG_FILE}" &
 TAIL_PID=$!
 trap "kill ${TAIL_PID} 2>/dev/null || true" EXIT
 
 # ======================================================
-# Write EXPECT controller script
+# Write EXPECT controller (NO MENU MATCHING)
 # ======================================================
 cat >run.expect <<'EOF'
 set timeout -1
 
-# IMPORTANT: SHOW INTERACTIVE OUTPUT
+# Show DBRepair output in docker logs
 log_user 1
-log_file -a $env(DockerLOG_FILE)
+log_file -a $env(DOCKER_LOG_FILE)
 
-# Start DBRepair under a real PTY
+# Spawn DBRepair under PTY
 spawn bash -lc "stdbuf -oL -eL ./DBRepair.sh --db '$env(DB_PATH)'"
 
-# State flags
-set sent_mode 0
-set sent_show 0
-set sent_exit 0
-
 # ------------------------------------------------------
-# Heartbeat loop (background, visible in logs)
+# Heartbeat (background)
 # ------------------------------------------------------
 set hb_pid [exec sh -c "
   INTERVAL='$env(HEARTBEAT_INTERVAL)';
@@ -111,46 +106,35 @@ set hb_pid [exec sh -c "
 " &]
 
 # ------------------------------------------------------
-# DBRepair menu automation
+# Give DBRepair time to initialize UI
 # ------------------------------------------------------
-expect {
-  -re {Enter command #.*:} {
+sleep 5
 
-    # 1) Run selected DBRepair operation
-    if { $sent_mode == 0 } {
-      send \"$env(MODE_CMD)\r\"
-      set sent_mode 1
-      exp_continue
-    }
+# ------------------------------------------------------
+# Send command sequence (guaranteed)
+# ------------------------------------------------------
+send "$env(MODE_CMD)\r"
+sleep 1
 
-    # 2) Show DBRepair internal logfile (menu 10)
-    if { $env(SHOW_LOG) == \"true\" && $sent_show == 0 } {
-      send \"10\r\"
-      set sent_show 1
-      exp_continue
-    }
-
-    # 3) Exit DBRepair (menu 99)
-    if { $sent_exit == 0 } {
-      send \"99\r\"
-      set sent_exit 1
-      exp_continue
-    }
-  }
-
-  # Cleanup confirmation after exit
-  -re {Ok to remove temporary.*\(Y/N\).*} {
-    send \"Y\r\"
-    exp_continue
-  }
-
-  # End of DBRepair
-  eof {
-    catch wait result
-    exec kill $hb_pid 2>/dev/null
-    exit [lindex $result 3]
-  }
+if { "$env(SHOW_LOG)" == "true" } {
+  send "10\r"
+  sleep 1
 }
+
+send "99\r"
+sleep 1
+send "Y\r"
+
+# ------------------------------------------------------
+# Wait for DBRepair to exit
+# ------------------------------------------------------
+expect eof
+
+# Cleanup heartbeat
+exec kill $hb_pid 2>/dev/null
+
+# Exit container cleanly
+exit 0
 EOF
 
 chmod +x run.expect
