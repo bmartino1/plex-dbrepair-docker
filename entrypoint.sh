@@ -9,7 +9,7 @@ set -euo pipefail
 : "${LOG_DIR:=/logs}"
 
 : "${DBREPAIR_MODE:=automatic}"   # automatic | check | vacuum | repair | reindex
-: "${SHOW_LOG:=true}"              # true | false (default TRUE)
+: "${SHOW_LOG:=true}"              # true | false
 : "${HEARTBEAT_INTERVAL:=300}"     # seconds (default 5 minutes)
 
 DB_PATH="${PLEX_DB_DIR}/${PLEX_DB_FILE}"
@@ -96,17 +96,22 @@ set sent_mode 0
 set sent_show 0
 set sent_exit 0
 
-# Heartbeat loop (independent of DBRepair output)
+# ------------------------------------------------------
+# Heartbeat loop (FIXED)
+# ------------------------------------------------------
 set hb_pid [exec sh -c "
+  INTERVAL='$env(HEARTBEAT_INTERVAL)';
   while true; do
-    echo 'DBREPAIR: heartbeat at '\"\$(date)\" 'interval='\"\$HEARTBEAT_INTERVAL\"'s';
-    echo 'DBREPAIR: Be patient, this can take a while...';
-    sleep \"$HEARTBEAT_INTERVAL\";
+    echo \"DBREPAIR: heartbeat at \$(date) interval=\${INTERVAL}s\";
+    echo \"DBREPAIR: Be patient, this can take a while...\";
+    sleep \"\${INTERVAL}\";
   done
 " &]
 
+# ------------------------------------------------------
+# DBRepair menu automation
+# ------------------------------------------------------
 expect {
-  # Main DBRepair menu prompt
   -re {Enter command #.*:} {
 
     # 1) Run requested operation
