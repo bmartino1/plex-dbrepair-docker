@@ -9,11 +9,11 @@ set -euo pipefail
 : "${LOG_DIR:=/logs}"
 
 : "${DBREPAIR_MODE:=automatic}"   # automatic | check | vacuum | repair | reindex
-: "${SHOW_LOG:=false}"            # true | false
-: "${HEARTBEAT_INTERVAL:=300}"    # seconds (default 5 minutes)
+: "${SHOW_LOG:=true}"              # true | false (default TRUE)
+: "${HEARTBEAT_INTERVAL:=300}"     # seconds (default 5 minutes)
 
 DB_PATH="${PLEX_DB_DIR}/${PLEX_DB_FILE}"
-LOG_FILE="${LOG_DIR}/dbrepair.log"
+DockerLOG_FILE="${LOG_DIR}/dbrepair.log"
 
 # ======================================================
 # Map DBREPAIR_MODE → DBRepair menu command
@@ -41,6 +41,7 @@ echo " DB Path        : ${DB_PATH}"
 echo " Mode           : ${DBREPAIR_MODE} (menu ${MODE_CMD})"
 echo " Show Log       : ${SHOW_LOG}"
 echo " Heartbeat      : every ${HEARTBEAT_INTERVAL}s"
+echo " Docker Log     : ${DockerLOG_FILE}"
 echo "=================================================="
 
 # ======================================================
@@ -62,20 +63,20 @@ fi
 mkdir -p "${LOG_DIR}"
 cd /opt/dbrepair
 
-# Hard reset log file every run
-rm -f "${LOG_FILE}"
-: > "${LOG_FILE}"
+# Hard reset Docker log file every run
+rm -f "${DockerLOG_FILE}"
+: > "${DockerLOG_FILE}"
 
 export DB_PATH
 export MODE_CMD
 export SHOW_LOG
 export HEARTBEAT_INTERVAL
-export LOG_FILE
+export DockerLOG_FILE
 
 # ======================================================
-# Mirror DBRepair log to Docker stdout
+# Mirror DBRepair log → Docker stdout
 # ======================================================
-tail -n 0 -F "${LOG_FILE}" &
+tail -n 0 -F "${DockerLOG_FILE}" &
 TAIL_PID=$!
 trap "kill ${TAIL_PID} 2>/dev/null || true" EXIT
 
@@ -85,7 +86,7 @@ trap "kill ${TAIL_PID} 2>/dev/null || true" EXIT
 cat >run.expect <<'EOF'
 set timeout -1
 log_user 0
-log_file -a $env(LOG_FILE)
+log_file -a $env(DockerLOG_FILE)
 
 # Start DBRepair under a real PTY
 spawn bash -lc "stdbuf -oL -eL ./DBRepair.sh --db '$env(DB_PATH)'"
@@ -150,6 +151,5 @@ chmod +x run.expect
 # ======================================================
 # Run DBRepair (expect is PID 1)
 # ======================================================
-echo " Starting DBRepair (non-interactive)"
-echo " Follow progress with: docker logs -f plex-dbrepair"
+echo " Starting DBRepair"
 exec expect ./run.expect
