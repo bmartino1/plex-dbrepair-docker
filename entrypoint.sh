@@ -2,28 +2,32 @@
 set -euo pipefail
 
 # ======================================================
-# Configuration
+# Configuration (Docker environment variables)
 # ======================================================
 : "${PLEX_DB_DIR:=/plexdb}"
 : "${PLEX_DB_FILE:=com.plexapp.plugins.library.db}"
 : "${LOG_DIR:=/logs}"
-: "${HEARTBEAT_INTERVAL:=120}"
-: "${DBREPAIR_MODE:=automatic}"
+
+: "${DBREPAIR_MODE:=automatic}"   # automatic | check | vacuum | repair | reindex
+: "${SHOW_LOG:=false}"            # true | false
+: "${HEARTBEAT_INTERVAL:=300}"    # seconds (default 5 minutes)
 
 DB_PATH="${PLEX_DB_DIR}/${PLEX_DB_FILE}"
 LOG_FILE="${LOG_DIR}/dbrepair.log"
 
 # ======================================================
-# Map DBREPAIR_MODE → menu selection
+# Map DBREPAIR_MODE → DBRepair menu command
 # ======================================================
 case "${DBREPAIR_MODE}" in
-  automatic) MENU_SELECTION="2" ;;
-  check)     MENU_SELECTION="3" ;;
-  repair)    MENU_SELECTION="5" ;;
+  automatic) MODE_CMD="2" ;;
+  check)     MODE_CMD="3" ;;
+  vacuum)    MODE_CMD="4" ;;
+  repair)    MODE_CMD="5" ;;
+  reindex)   MODE_CMD="6" ;;
   *)
-    echo "ERROR: Invalid DBREPAIR_MODE='${DBREPAIR_MODE}'"
-    echo "Valid values: automatic | check | repair"
-    exit 1
+    echo "WARNING: Invalid DBREPAIR_MODE='${DBREPAIR_MODE}', falling back to 'automatic'"
+    MODE_CMD="2"
+    DBREPAIR_MODE="automatic"
     ;;
 esac
 
@@ -31,26 +35,25 @@ esac
 # Banner
 # ======================================================
 echo "=================================================="
-echo " Plex DBRepair Container"
+echo " Plex DBRepair Docker"
 echo "=================================================="
-echo " Plex DB Dir     : ${PLEX_DB_DIR}"
-echo " Database        : ${PLEX_DB_FILE}"
-echo " DB Path         : ${DB_PATH}"
-echo " Mode            : ${DBREPAIR_MODE} (menu ${MENU_SELECTION})"
-echo " Heartbeat       : every ${HEARTBEAT_INTERVAL}s"
+echo " DB Path        : ${DB_PATH}"
+echo " Mode           : ${DBREPAIR_MODE} (menu ${MODE_CMD})"
+echo " Show Log       : ${SHOW_LOG}"
+echo " Heartbeat      : every ${HEARTBEAT_INTERVAL}s"
 echo "=================================================="
 
 # ======================================================
 # Safety checks
 # ======================================================
 if [[ ! -d "${PLEX_DB_DIR}" ]]; then
-    echo "ERROR: Plex DB directory not found"
-    exit 1
+  echo "ERROR: Plex DB directory not found: ${PLEX_DB_DIR}"
+  exit 1
 fi
 
 if [[ ! -f "${DB_PATH}" ]]; then
-    echo "ERROR: Plex DB file not found"
-    exit 1
+  echo "ERROR: Plex DB file not found: ${DB_PATH}"
+  exit 1
 fi
 
 # ======================================================
@@ -64,96 +67,82 @@ rm -f "${LOG_FILE}"
 : > "${LOG_FILE}"
 
 export DB_PATH
-export LOG_FILE
+export MODE_CMD
+export SHOW_LOG
 export HEARTBEAT_INTERVAL
-export MENU_SELECTION
+export LOG_FILE
 
 # ======================================================
-# Mirror log file → Docker logs
+# Mirror DBRepair log to Docker stdout
 # ======================================================
 tail -n 0 -F "${LOG_FILE}" &
 TAIL_PID=$!
-
-cleanup() {
-    kill "${TAIL_PID}" 2>/dev/null || true
-}
-trap cleanup EXIT
+trap "kill ${TAIL_PID} 2>/dev/null || true" EXIT
 
 # ======================================================
-# Write EXPECT script (PID 1 controller)
+# Write EXPECT controller script
 # ======================================================
 cat >run.expect <<'EOF'
 set timeout -1
 log_user 0
-
-# Log everything ONLY to file
 log_file -a $env(LOG_FILE)
 
-# ------------------------------------------------------
-# Spawn DBRepair with heartbeat
-# ------------------------------------------------------
-spawn bash -lc "
-  echo 'DBREPAIR: started at '\"\$(date)\";
+# Start DBRepair under a real PTY
+spawn bash -lc "stdbuf -oL -eL ./DBRepair.sh --db '$env(DB_PATH)'"
 
-  # Heartbeat loop
-  (
-    while true; do
-      echo 'DBREPAIR: heartbeat at '\"\$(date)\" 'interval='\"\$HEARTBEAT_INTERVAL\"'s';
-      echo 'DBREPAIR: Be patient, this can take a while...';
-      sleep \"\$HEARTBEAT_INTERVAL\";
-    done
-  ) &
-  HB_PID=\$!
+# State flags
+set sent_mode 0
+set sent_show 0
+set sent_exit 0
 
-  # Run DBRepair
-  stdbuf -oL -eL ./DBRepair.sh --db '$env(DB_PATH)';
-  RC=\$?
+# Heartbeat loop (independent of DBRepair output)
+set hb_pid [exec sh -c "
+  while true; do
+    echo 'DBREPAIR: heartbeat at '\"\$(date)\" 'interval='\"\$HEARTBEAT_INTERVAL\"'s';
+    echo 'DBREPAIR: Be patient, this can take a while...';
+    sleep \"$HEARTBEAT_INTERVAL\";
+  done
+" &]
 
-  # Stop heartbeat
-  kill \$HB_PID 2>/dev/null || true
-
-  echo 'DBREPAIR: finished at '\"\$(date)\";
-  echo 'DBREPAIR: exit code '\"\$RC\";
-
-  exit \$RC
-"
-
-# ------------------------------------------------------
-# Expect state machine
-# ------------------------------------------------------
-set exit_status 0
 expect {
-    # Main menu selection
-    -re {Enter selection:} {
-        send "$env(MENU_SELECTION)\r"
-        exp_continue
+  # Main DBRepair menu prompt
+  -re {Enter command #.*:} {
+
+    # 1) Run requested operation
+    if { $sent_mode == 0 } {
+      send \"$env(MODE_CMD)\r\"
+      set sent_mode 1
+      exp_continue
     }
 
-    # Generic confirmations
-    -re {Continue.*\[y/N\]} {
-        send "y\r"
-        exp_continue
+    # 2) Show DBRepair internal log (menu 10)
+    if { $env(SHOW_LOG) == \"true\" && $sent_show == 0 } {
+      send \"10\r\"
+      set sent_show 1
+      exp_continue
     }
 
-    -re {Proceed.*\[y/N\]} {
-        send "y\r"
-        exp_continue
+    # 3) Exit DBRepair (menu 99)
+    if { $sent_exit == 0 } {
+      send \"99\r\"
+      set sent_exit 1
+      exp_continue
     }
+  }
 
-    # Enter-only pauses
-    -re {Press.*Enter} {
-        send "\r"
-        exp_continue
-    }
+  # Cleanup prompt after 99
+  -re {Ok to remove temporary.*\(Y/N\).*} {
+    send \"Y\r\"
+    exp_continue
+  }
 
-    # End of program
-    eof {
-        catch wait result
-        set exit_status [lindex $result 3]
-    }
+  # End of DBRepair
+  eof {
+    catch wait result
+    exec kill $hb_pid 2>/dev/null
+    exit [lindex $result 3]
+  }
 }
-
-exit $exit_status
 EOF
 
 chmod +x run.expect
@@ -161,7 +150,6 @@ chmod +x run.expect
 # ======================================================
 # Run DBRepair (expect is PID 1)
 # ======================================================
-echo " Starting DBRepair (mode=${DBREPAIR_MODE})"
+echo " Starting DBRepair (non-interactive)"
 echo " Follow progress with: docker logs -f plex-dbrepair"
-echo " Be Patient, this can take a while!"
 exec expect ./run.expect
