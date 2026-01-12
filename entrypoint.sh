@@ -5,157 +5,176 @@ set -euo pipefail
 # Docker environment variables
 # ======================================================
 : "${PLEX_DB_DIR:=/plexdb}"
-: "${PLEX_DB_FILE:=com.plexapp.plugins.library.db}"
 : "${LOG_DIR:=/logs}"
+: "${DBREPAIR_MODE:=automatic}"   # automatic | check | vacuum | repair | reindex | manual
 
-: "${DBREPAIR_MODE:=automatic}"        # automatic | check | vacuum | repair | reindex
-: "${DBREPAIR_UPDATE:=false}"          # true | false
-: "${SHOW_LOG:=true}"                  # true | false
-: "${HEARTBEAT_INTERVAL:=300}"         # seconds
-
-# Plex control variables
+# Plex control variables (container-level only)
 : "${PLEX_MATCH_REGEX:=Plex Media Server|plex}"
 : "${EXCLUDE_CONTAINER_NAMES:=dbrepair,plex-dbrepair}"
 : "${EXCLUDE_IMAGE_REGEX:=plex-dbrepair}"
 : "${ALLOW_PLEX_KILL:=true}"
 : "${KILL_STRAY_PLEX_PROCESSES:=true}"
 
-DB_PATH="${PLEX_DB_DIR}/${PLEX_DB_FILE}"
-LOGFILE="${LOG_DIR}/dbrepair.log"
+# ======================================================
+# Constants
+# ======================================================
+CPPL="com.plexapp.plugins.library"
+DB_MAIN="${PLEX_DB_DIR}/${CPPL}.db"
+DB_BLOBS="${PLEX_DB_DIR}/${CPPL}.blobs.db"
+SQLITE_BIN="/usr/bin/sqlite3"
 
-# ======================================================
-# Map DBREPAIR_MODE → UPSTREAM SCRIPTED COMMAND
-# ======================================================
-case "${DBREPAIR_MODE}" in
-  automatic) MODE_CMD="auto" ;;
-  check)     MODE_CMD="check" ;;
-  vacuum)    MODE_CMD="vacuum" ;;
-  repair)    MODE_CMD="repair" ;;
-  reindex)   MODE_CMD="reindex" ;;
-  *)
-    echo "WARNING: Invalid DBREPAIR_MODE='${DBREPAIR_MODE}', defaulting to automatic"
-    MODE_CMD="auto"
-    DBREPAIR_MODE="automatic"
-    ;;
-esac
+LOGFILE="${LOG_DIR}/dbrepair.log"
+TMPDIR="/tmp/dbrepair"
+
+mkdir -p "$LOG_DIR" "$TMPDIR"
+: > "$LOGFILE"
+exec > >(tee -a "$LOGFILE") 2>&1
 
 # ======================================================
 # Banner
 # ======================================================
 echo "=================================================="
-echo " Plex DBRepair (SCRIPTED MODE)"
+echo " Plex DBRepair (Docker Native)"
 echo "=================================================="
-echo " DB Path                : ${DB_PATH}"
-echo " Mode                   : ${DBREPAIR_MODE}"
-echo " Update                 : ${DBREPAIR_UPDATE}"
-echo " Show Log               : ${SHOW_LOG}"
-echo " Heartbeat              : ${HEARTBEAT_INTERVAL}s"
-echo " Plex Match Regex       : ${PLEX_MATCH_REGEX}"
-echo " Exclude Containers     : ${EXCLUDE_CONTAINER_NAMES}"
-echo " Exclude Image Regex    : ${EXCLUDE_IMAGE_REGEX}"
-echo " Allow Plex Kill        : ${ALLOW_PLEX_KILL}"
-echo " Kill Stray Plex Procs  : ${KILL_STRAY_PLEX_PROCESSES}"
-echo " Log File               : ${LOGFILE}"
+echo " Mode        : ${DBREPAIR_MODE}"
+echo " DB Dir      : ${PLEX_DB_DIR}"
+echo " Main DB     : ${DB_MAIN}"
+echo " Blobs DB    : ${DB_BLOBS}"
 echo "=================================================="
 
 # ======================================================
 # Safety checks
 # ======================================================
-[[ -d "${PLEX_DB_DIR}" ]] || { echo "ERROR: Plex DB dir missing"; exit 1; }
-[[ -f "${DB_PATH}" ]]     || { echo "ERROR: Plex DB file missing"; exit 1; }
-
-mkdir -p "${LOG_DIR}"
-cd /opt/dbrepair
-: > "${LOGFILE}"
-
-# Mirror EVERYTHING to docker log + logfile
-exec > >(tee -a "${LOGFILE}") 2>&1
+[[ -d "$PLEX_DB_DIR" ]] || { echo "ERROR: Plex DB dir missing"; exit 1; }
+[[ -f "$DB_MAIN" ]]     || { echo "ERROR: Main DB missing"; exit 1; }
+[[ -f "$DB_BLOBS" ]]    || { echo "ERROR: Blobs DB missing"; exit 1; }
 
 # ======================================================
-# Plex shutdown logic (CONTAINER LEVEL ONLY)
+# Manual mode = escape hatch
 # ======================================================
-if [[ "${ALLOW_PLEX_KILL}" == "true" ]]; then
-  echo "Scanning for Plex containers to stop…"
+if [[ "$DBREPAIR_MODE" == "manual" ]]; then
+  echo "Entering MANUAL mode. You may run DBRepair.sh yourself."
+  exec bash
+fi
 
-  IFS=',' read -ra EXCL_NAMES <<< "${EXCLUDE_CONTAINER_NAMES}"
+# ======================================================
+# Plex shutdown logic (container-level)
+# ======================================================
+if [[ "$ALLOW_PLEX_KILL" == "true" ]]; then
+  echo "Scanning for Plex containers to stop..."
+  IFS=',' read -ra EXCL <<< "$EXCLUDE_CONTAINER_NAMES"
 
   docker ps --format '{{.ID}} {{.Names}} {{.Image}}' | while read -r CID NAME IMAGE; do
-    # Exclude by name
-    for EX in "${EXCL_NAMES[@]}"; do
-      [[ "${NAME}" == "${EX}" ]] && continue 2
+    for X in "${EXCL[@]}"; do
+      [[ "$NAME" == "$X" ]] && continue 2
     done
-
-    # Exclude by image regex
-    echo "${IMAGE}" | grep -qiE "${EXCLUDE_IMAGE_REGEX}" && continue
-
-    # Match Plex
-    if echo "${NAME} ${IMAGE}" | grep -qiE "${PLEX_MATCH_REGEX}"; then
-      echo "Stopping Plex container: ${NAME} (${CID}) image=${IMAGE}"
-      docker update --restart=no "${CID}" >/dev/null 2>&1 || true
-      docker stop "${CID}" >/dev/null 2>&1 || true
+    echo "$IMAGE" | grep -qiE "$EXCLUDE_IMAGE_REGEX" && continue
+    if echo "$NAME $IMAGE" | grep -qiE "$PLEX_MATCH_REGEX"; then
+      echo "Stopping Plex container: $NAME ($CID)"
+      docker update --restart=no "$CID" >/dev/null 2>&1 || true
+      docker stop "$CID" >/dev/null 2>&1 || true
     fi
   done
 else
-  echo "ALLOW_PLEX_KILL=false — skipping container shutdown"
+  echo "Skipping Plex shutdown"
 fi
 
 # ======================================================
-# Stray Plex process kill (OPTIONAL)
+# Core DBRepair logic (extracted from ChuckPa)
 # ======================================================
-if [[ "${KILL_STRAY_PLEX_PROCESSES}" == "true" ]]; then
-  if pgrep -f "Plex Media Server" >/dev/null 2>&1; then
-    echo "Killing stray Plex Media Server processes"
-    pkill -TERM -f "Plex Media Server" || true
-    sleep 3
-    pkill -9 -f "Plex Media Server" || true
-  fi
-else
-  echo "KILL_STRAY_PLEX_PROCESSES=false — skipping process kill"
-fi
+db_check_one() {
+  local db="$1"
+  echo "Checking $(basename "$db")"
+  local result
+  result="$("$SQLITE_BIN" "$db" "PRAGMA integrity_check(1);")"
+  [[ "$result" == "ok" ]] && return 0
+  echo "Integrity error: $result"
+  return 1
+}
 
-# ======================================================
-# Build DBRepair command list (UPSTREAM)
-# ======================================================
-DBR_CMDS=()
-[[ "${DBREPAIR_UPDATE}" == "true" ]] && DBR_CMDS+=( update )
-DBR_CMDS+=( "${MODE_CMD}" )
-[[ "${SHOW_LOG}" == "true" ]] && DBR_CMDS+=( show )
-DBR_CMDS+=( exit )
+db_check() {
+  db_check_one "$DB_MAIN" && db_check_one "$DB_BLOBS"
+}
 
-echo "--------------------------------------------------"
-echo "DBRepair command sequence:"
-printf '  %s\n' "${DBR_CMDS[@]}"
-echo "--------------------------------------------------"
+db_backup() {
+  TS="$(date +%Y%m%d-%H%M%S)"
+  BK="${PLEX_DB_DIR}/dbrepair-backup-${TS}"
+  mkdir -p "$BK"
+  echo "Creating backup: $BK"
 
-# ======================================================
-# Heartbeat (ONLY during DBRepair)
-# ======================================================
-heartbeat() {
-  while true; do
-    echo "[HEARTBEAT] $(date '+%Y-%m-%d %H:%M:%S') - DBRepair running, please be patient..."
-    sleep "${HEARTBEAT_INTERVAL}"
+  for f in \
+    "${CPPL}.db" \
+    "${CPPL}.db-wal" \
+    "${CPPL}.db-shm" \
+    "${CPPL}.blobs.db" \
+    "${CPPL}.blobs.db-wal" \
+    "${CPPL}.blobs.db-shm"
+  do
+    [[ -f "${PLEX_DB_DIR}/$f" ]] && cp -p "${PLEX_DB_DIR}/$f" "$BK/"
   done
 }
 
-heartbeat &
-HB_PID=$!
-trap 'kill "${HB_PID}" 2>/dev/null || true' EXIT
+db_repair_one() {
+  local db="$1"
+  local base
+  base="$(basename "$db")"
+
+  echo "Repairing $base"
+  local dump="${TMPDIR}/${base}.sql"
+  local newdb="${TMPDIR}/${base}.new"
+
+  "$SQLITE_BIN" "$db" .dump > "$dump"
+  "$SQLITE_BIN" "$newdb" < "$dump"
+
+  mv "$db" "${db}.damaged.$(date +%s)"
+  mv "$newdb" "$db"
+}
+
+db_repair() {
+  db_backup
+  db_repair_one "$DB_MAIN"
+  db_repair_one "$DB_BLOBS"
+  db_reindex
+}
+
+db_vacuum() {
+  echo "Vacuuming databases"
+  "$SQLITE_BIN" "$DB_MAIN"  "VACUUM;"
+  "$SQLITE_BIN" "$DB_BLOBS" "VACUUM;"
+}
+
+db_reindex() {
+  echo "Reindexing databases"
+  "$SQLITE_BIN" "$DB_MAIN"  "REINDEX;"
+  "$SQLITE_BIN" "$DB_BLOBS" "REINDEX;"
+}
+
+db_auto() {
+  if db_check; then
+    echo "Databases OK — skipping repair"
+  else
+    echo "Damage detected — repairing"
+    db_repair
+  fi
+  db_vacuum
+  db_reindex
+}
 
 # ======================================================
-# Run DBRepair (SCRIPTED MODE, REAL TTY)
+# Dispatch
 # ======================================================
-export Scripted=1
-export LOGFILE
+case "$DBREPAIR_MODE" in
+  automatic) db_auto ;;
+  check)     db_check ;;
+  vacuum)    db_vacuum ;;
+  repair)    db_repair ;;
+  reindex)   db_reindex ;;
+  *)
+    echo "ERROR: Unknown DBREPAIR_MODE=$DBREPAIR_MODE"
+    exit 2
+    ;;
+esac
 
-set +e
-script -q -e -c \
-  "stdbuf -oL -eL ./DBRepair.sh --db '${DB_PATH}' ${DBR_CMDS[*]}" \
-  /dev/null
-RC=$?
-set -e
-
-kill "${HB_PID}" 2>/dev/null || true
-
-echo "--------------------------------------------------"
-echo "DBRepair finished with exit code ${RC}"
-exit "${RC}"
+echo "=================================================="
+echo " Plex DBRepair completed successfully"
+echo "=================================================="
