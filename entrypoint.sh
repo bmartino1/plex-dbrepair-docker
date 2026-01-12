@@ -14,6 +14,9 @@ set -euo pipefail
 : "${SHOW_LOG:=true}"               # true | false
 : "${HEARTBEAT_INTERVAL:=300}"      # seconds
 
+# Optional: Unraid usually provides this
+: "${HOST_CONTAINERNAME:=}"         # e.g. "dbrepair"
+
 DB_PATH="${PLEX_DB_DIR}/${PLEX_DB_FILE}"
 LOGFILE="${LOG_DIR}/dbrepair.log"
 
@@ -63,26 +66,54 @@ cd /opt/dbrepair
 : > "${LOGFILE}"
 
 # ======================================================
+# Identify THIS container (robust)
+# ======================================================
+SELF_ID_FULL="$(awk -F/ '/docker/ {print $NF; exit}' /proc/self/cgroup || true)"
+SELF_ID_SHORT="${SELF_ID_FULL:0:12}"
+SELF_NAME="$(hostname)"
+
+echo "Self container detection:" | tee -a "${LOGFILE}"
+echo "  SELF_ID_FULL : ${SELF_ID_FULL:-unknown}" | tee -a "${LOGFILE}"
+echo "  SELF_ID_SHORT: ${SELF_ID_SHORT:-unknown}" | tee -a "${LOGFILE}"
+echo "  HOSTNAME     : ${SELF_NAME}" | tee -a "${LOGFILE}"
+[[ -n "${HOST_CONTAINERNAME}" ]] && echo "  HOST_CONTAINERNAME: ${HOST_CONTAINERNAME}" | tee -a "${LOGFILE}"
+
+# ======================================================
 # STOP ALL PLEX INSTANCES (containers + stray processes)
 # ======================================================
 echo "Stopping ALL Plex instances..." | tee -a "${LOGFILE}"
 
-SELF_CID="$(awk -F/ '/docker/{print $NF; exit}' /proc/self/cgroup)"
+# Stop containers that look like Plex, but DO NOT stop self or plex-dbrepair
+docker ps --format '{{.ID}} {{.Names}} {{.Image}}' | while read -r CID NAME IMAGE; do
+  # Exclude self by ID prefix
+  if [[ -n "${SELF_ID_SHORT}" && "${CID}" == "${SELF_ID_SHORT}"* ]]; then
+    continue
+  fi
+  # Exclude self by hostname name match (best-effort)
+  if [[ "${NAME}" == "${SELF_NAME}" ]]; then
+    continue
+  fi
+  # Exclude if Unraid gave us container name and this matches
+  if [[ -n "${HOST_CONTAINERNAME}" && "${NAME}" == "${HOST_CONTAINERNAME}" ]]; then
+    continue
+  fi
+  # Exclude our own image
+  if echo "${IMAGE}" | grep -qiE 'plex-dbrepair'; then
+    continue
+  fi
 
-docker ps --format '{{.ID}} {{.Names}} {{.Image}}' \
-| grep -i plex \
-| while read -r CID NAME IMAGE; do
-    if [[ "${CID}" != "${SELF_CID}" ]]; then
-      echo "Stopping Plex container: ${NAME} (${CID})" \
-        | tee -a "${LOGFILE}"
-      docker update --restart=no "${CID}" >/dev/null 2>&1 || true
-      docker stop "${CID}" >/dev/null 2>&1 || true
-    fi
-  done
+  # Match Plex containers (name or image)
+  if echo "${NAME}" | grep -qiE 'plex' || echo "${IMAGE}" | grep -qiE '(^|/|-)plex(:|$)'; then
+    echo "Disabling restart + stopping Plex container: ${NAME} (${CID}) image=${IMAGE}" \
+      | tee -a "${LOGFILE}"
+    docker update --restart=no "${CID}" >/dev/null 2>&1 || true
+    docker stop "${CID}" >/dev/null 2>&1 || true
+  fi
+done
 
+# Kill stray PMS processes (rare, but safe)
 if pgrep -f "Plex Media Server" >/dev/null 2>&1; then
-  echo "Killing stray Plex Media Server processes..." \
-    | tee -a "${LOGFILE}"
+  echo "Killing stray Plex Media Server processes..." | tee -a "${LOGFILE}"
   pkill -TERM -f "Plex Media Server" || true
   sleep 3
   pkill -9 -f "Plex Media Server" || true
