@@ -36,9 +36,11 @@ RUN apt-get update && \
         findutils \
         grep \
         gawk \
-        docker.io \
+        mawk \
         sqlite3 \
         libsqlite3-ext-icu \
+        docker-cli \
+        mc \
     && rm -rf /var/lib/apt/lists/*
 
 # ======================================================
