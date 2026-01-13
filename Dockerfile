@@ -1,28 +1,25 @@
 # ======================================================
 # Base Image
 #
-# We intentionally use Debian SID (unstable) because:
-#  - Plex databases REQUIRE SQLite ICU collations
+# Debian SID is REQUIRED because:
+#  - Plex databases can use ICU collations
 #  - libsqlite3-ext-icu does NOT exist in Debian stable
-#  - This container is a one-shot maintenance utility,
-#    not a long-running service
+#  - This is a one-shot maintenance container
 # ======================================================
 FROM debian:sid-slim
 
 LABEL org.opencontainers.image.title="Plex DBRepair"
-LABEL org.opencontainers.image.description="Native Plex SQLite repair container with ICU support, compatible with ChuckPa DBRepair"
-LABEL org.opencontainers.image.source="https://github.com/ChuckPa/DBRepair"
+LABEL org.opencontainers.image.description="Native Plex SQLite repair container with ICU support and Docker CLI"
+LABEL org.opencontainers.image.source="https://github.com/bmartino1/plex-dbrepair-docker"
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ======================================================
-# Runtime dependencies
+# Base runtime dependencies
 #
 # Notes:
-#  - sqlite3 + libsqlite3-ext-icu provide ICU collations
-#  - docker.io is required to stop/start Plex containers
-#    via /var/run/docker.sock
-#  - gawk is used instead of virtual 'awk'
+#  - sqlite3 + libsqlite3-ext-icu = ICU support
+#  - gawk avoids virtual awk issues
 # ======================================================
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -39,28 +36,43 @@ RUN apt-get update && \
         mawk \
         sqlite3 \
         libsqlite3-ext-icu \
-        docker-cli \
-        mc \
     && rm -rf /var/lib/apt/lists/*
+
+# ======================================================
+# Docker CLI (official, provides /usr/bin/docker)
+#
+# This is REQUIRED for:
+#  - stopping Plex containers
+#  - restarting Plex containers
+# ======================================================
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates curl && \
+    install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/debian/gpg \
+        -o /etc/apt/keyrings/docker.asc && \
+    chmod a+r /etc/apt/keyrings/docker.asc && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+https://download.docker.com/linux/debian sid stable" \
+        > /etc/apt/sources.list.d/docker.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends docker-ce-cli && \
+    rm -rf /var/lib/apt/lists/*
 
 # ======================================================
 # SQLite ICU sanity check (non-fatal)
 #
-# We DO NOT fail the build if ICU cannot be loaded.
-# The entrypoint script handles runtime behavior safely.
+# Entry point handles runtime safety.
+# This just confirms ICU symbols exist.
 # ======================================================
 RUN sqlite3 :memory: "SELECT icu_load_collation('en_US','test');" || true
 
 # ======================================================
-# DBRepair (ChuckPa) script
+# ChuckPa DBRepair script (for parity & manual use)
 #
 # IMPORTANT:
-#  - This script is downloaded verbatim and preserved
-#  - It is NOT executed automatically by this container
-#  - It is available for:
-#       * manual debugging
-#       * parity with upstream
-#       * trust / audit purposes
+#  - Downloaded verbatim
+#  - NOT executed automatically
+#  - Available in manual mode for audit/debug
 # ======================================================
 WORKDIR /opt/dbrepair
 
@@ -72,14 +84,11 @@ RUN curl -fsSL \
 # ======================================================
 # Entrypoint
 #
-# The entrypoint implements:
+# Implements:
 #  - Native SQLite operations
 #  - ICU-safe behavior
 #  - Plex container self-protection
 #  - Optional backup / restore
-#
-# DBRepair.sh is NOT called unless user explicitly does so
-# in manual mode.
 # ======================================================
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
