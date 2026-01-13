@@ -27,8 +27,6 @@ set -euo pipefail
 : "${EXCLUDE_CONTAINER_NAMES:=dbrepair,plex-dbrepair}"
 : "${EXCLUDE_IMAGE_REGEX:=plex-dbrepair}"
 
-# SQLite handling
-: "${SQLITE_NO_ICU:=false}"
 SQLITE="/usr/bin/sqlite3"
 
 # ---------------------------------------------------------
@@ -52,11 +50,7 @@ STOPPED_IDS_FILE="/tmp/plex_stopped_ids.txt"
 # Helpers
 # ---------------------------------------------------------
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
-
-die() {
-  log "FATAL: $*"
-  exit 1
-}
+die() { log "FATAL: $*"; exit 1; }
 
 need_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
 
@@ -69,16 +63,10 @@ docker_sock_available() {
 # ---------------------------------------------------------
 need_cmd tee awk grep find cp mv ls
 
-[[ -x "$SQLITE" ]] || die "sqlite3 missing at $SQLITE"
+[[ -x "$SQLITE" ]] || die "sqlite3 missing"
 [[ -d "$DBDIR" ]]  || die "DBDIR missing: $DBDIR"
-[[ -f "$LIB_DB" ]] || die "Main DB missing: $LIB_DB"
-[[ -w "$DBDIR" ]]  || die "DBDIR not writable (check UID/GID mapping)"
-
-# ICU workaround
-if [[ "$SQLITE_NO_ICU" == "true" ]]; then
-  export SQLITE_ICU=0
-  log "SQLite ICU disabled (SQLITE_NO_ICU=true)"
-fi
+[[ -f "$LIB_DB" ]] || die "Main DB missing"
+[[ -w "$DBDIR" ]]  || die "DBDIR not writable (UID/GID mismatch)"
 
 # Mirror all output
 exec > >(tee -a "$LOGFILE") 2>&1
@@ -86,16 +74,33 @@ exec > >(tee -a "$LOGFILE") 2>&1
 log "=================================================="
 log " Plex DBRepair – Native Docker"
 log "=================================================="
-log " Mode                  : $DBREPAIR_MODE"
-log " Plex Root             : $PLEX_ROOT"
-log " Databases             : $DBDIR"
-log " SQLite                : $SQLITE"
-log " Backups Enabled       : $ENABLE_BACKUPS"
-log " Restore Last Backup   : $RESTORE_LAST_BACKUP"
-log " Backup Root           : $BACKUP_ROOT"
-log " Exclude Names         : $EXCLUDE_CONTAINER_NAMES"
-log " Exclude Image Regex   : $EXCLUDE_IMAGE_REGEX"
+log " Mode                : $DBREPAIR_MODE"
+log " Plex Root           : $PLEX_ROOT"
+log " Databases           : $DBDIR"
+log " Backups Enabled     : $ENABLE_BACKUPS"
+log " Restore Last Backup : $RESTORE_LAST_BACKUP"
 log "=================================================="
+
+# ---------------------------------------------------------
+# ICU auto-detection (SILENT, SAFE)
+# ---------------------------------------------------------
+db_requires_icu() {
+  "$SQLITE" "$LIB_DB" \
+    "SELECT 1 FROM pragma_collation_list WHERE name LIKE 'icu_%' LIMIT 1;" \
+    | grep -q '^1$'
+}
+
+sqlite_has_icu() {
+  "$SQLITE" :memory: \
+    "SELECT icu_load_collation('en_US','icu_test');" \
+    >/dev/null 2>&1
+}
+
+if db_requires_icu && sqlite_has_icu; then
+  export SQLITE_ICU=1
+fi
+# If DB does not require ICU, or sqlite lacks ICU, we continue safely
+# (Docker image is responsible for correctness)
 
 # ---------------------------------------------------------
 # Docker Plex stop/start (self-safe)
@@ -103,35 +108,19 @@ log "=================================================="
 stop_plex_containers() {
   : > "$STOPPED_IDS_FILE"
 
-  [[ "$ALLOW_PLEX_KILL" != "true" ]] && {
-    log "ALLOW_PLEX_KILL=false — skipping Plex stop"
-    return
-  }
-
-  docker_sock_available || {
-    log "docker.sock unavailable — skipping Plex stop"
-    return
-  }
+  [[ "$ALLOW_PLEX_KILL" != "true" ]] && return
+  docker_sock_available || return
 
   IFS=',' read -ra EXCL <<< "$EXCLUDE_CONTAINER_NAMES"
-
-  log "Scanning for Plex containers to stop..."
 
   docker ps --format '{{.ID}} {{.Names}} {{.Image}}' |
   while read -r cid name image; do
 
     for ex in "${EXCL[@]}"; do
-      [[ "$name" == "$ex" ]] && {
-        log "Skipping excluded container: $name"
-        continue 2
-      }
+      [[ "$name" == "$ex" ]] && continue 2
     done
 
-    echo "$image" | grep -qiE "$EXCLUDE_IMAGE_REGEX" && {
-      log "Skipping excluded image: $image"
-      continue
-    }
-
+    echo "$image" | grep -qiE "$EXCLUDE_IMAGE_REGEX" && continue
     echo "$name $image" | grep -qiE "$PLEX_CONTAINER_MATCH" || continue
 
     log "Stopping Plex container: $name ($cid)"
@@ -164,23 +153,15 @@ latest_backup_dir() {
 restore_last_backup() {
   local last
   last="$(latest_backup_dir)"
-  [[ -d "$last" ]] || die "No backups found to restore"
+  [[ -d "$last" ]] || die "No backups found"
 
-  log "Restoring from backup: $last"
-
-  for f in "$last"/*; do
-    log "Restoring $(basename "$f")"
-    cp -a "$f" "$DBDIR/"
-  done
+  log "Restoring backup: $last"
+  cp -a "$last"/* "$DBDIR/"
 }
 
 backup_all() {
-  [[ "$ENABLE_BACKUPS" != "true" ]] && {
-    log "Backups disabled — skipping"
-    return
-  }
+  [[ "$ENABLE_BACKUPS" != "true" ]] && return
 
-  log "Creating backup set..."
   mkdir -p "$BACKUP_DIR"
   chmod 700 "$BACKUP_DIR" || true
 
@@ -191,8 +172,6 @@ backup_all() {
   do
     [[ -f "$f" ]] && cp -a "$f" "$BACKUP_DIR/"
   done
-
-  log "Backup completed: $BACKUP_DIR"
 }
 
 # ---------------------------------------------------------
@@ -202,7 +181,7 @@ checkpoint_db() {
   [[ -f "$1-wal" ]] && "$SQLITE" "$1" "PRAGMA wal_checkpoint(TRUNCATE);" || true
 }
 
-check_db()   { log "Integrity check: $(basename "$1")"; "$SQLITE" "$1" "PRAGMA integrity_check(1);"; }
+check_db()   { log "Check: $(basename "$1")"; "$SQLITE" "$1" "PRAGMA integrity_check(1);"; }
 vacuum_db()  { checkpoint_db "$1"; log "Vacuum: $(basename "$1")"; "$SQLITE" "$1" "VACUUM;"; }
 reindex_db() { checkpoint_db "$1"; log "Reindex: $(basename "$1")"; "$SQLITE" "$1" "REINDEX;"; }
 
@@ -217,7 +196,6 @@ deflate_db() {
 prune_cache() {
   local cache="$PLEX_ROOT/Cache/PhotoTranscoder"
   [[ -d "$cache" ]] || return
-  log "Pruning PhotoTranscoder cache > ${PRUNE_DAYS} days"
   find "$cache" -type f -mtime "+${PRUNE_DAYS}" -delete || true
 }
 
@@ -228,13 +206,13 @@ stop_plex_containers
 
 if [[ "$RESTORE_LAST_BACKUP" == "true" ]]; then
   restore_last_backup
-  log "Restore complete — exiting"
+  log "Restore complete"
   exit 0
 fi
 
 case "$DBREPAIR_MODE" in
   manual)
-    log "Entering manual shell (full Plex library available under /config)"
+    log "Entering manual shell"
     exec bash
     ;;
   check)
