@@ -2,24 +2,23 @@
 # Base Image
 #
 # Debian SID is REQUIRED because:
-#  - Plex databases can use ICU collations
-#  - libsqlite3-ext-icu does NOT exist in Debian stable
+#  - Plex databases can rely on ICU collations
+#  - Plex SQLite extensions are NOT in Debian...
 #  - This is a one-shot maintenance container
 # ======================================================
 FROM debian:sid-slim
 
 LABEL org.opencontainers.image.title="Plex DBRepair"
-LABEL org.opencontainers.image.description="Native Plex SQLite repair container with ICU support and Docker CLI"
+LABEL org.opencontainers.image.description="Native Plex SQLite repair container with Plex SQLite extensions"
 LABEL org.opencontainers.image.source="https://github.com/bmartino1/plex-dbrepair-docker"
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ======================================================
-# Base runtime dependencies
-#
-# Notes:
-#  - sqlite3 + libsqlite3-ext-icu = ICU support
-#  - gawk avoids virtual awk issues
+# Core runtime dependencies
+# ======================================================
+# ======================================================
+# Runtime + SQLite + Diagnostics (Plex-safe)
 # ======================================================
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -29,27 +28,34 @@ RUN apt-get update && \
         coreutils \
         util-linux \
         procps \
+        psmisc \
         gzip \
         findutils \
         grep \
         gawk \
         mawk \
-        sqlite3 \
-        libsqlite3-ext-icu \
+        less \
+        file \
+        jq \
+        lsof \
+        strace \
+        tzdata \
+        screen \
         mc \
+        sqlite3 \
+        libsqlite3-0 \
+        libsqlite3-ext-icu \
+        libsqlite3-mod-fts5 \
+        libsqlite3-mod-json1 \
+        libsqlite3-mod-spatialite \
     && rm -rf /var/lib/apt/lists/*
+
 
 # ======================================================
 # Docker CLI (official)
 #
-# IMPORTANT:
-# Docker does NOT publish a "sid" repo.
-# We intentionally use the BOOKWORM repo, which is
-# ABI-compatible with SID for the Docker CLI.
-#
-# This provides /usr/bin/docker for:
-#  - stopping Plex containers
-#  - restarting Plex containers
+# Docker does NOT publish a SID repo.
+# We intentionally use BOOKWORM (ABI compatible).
 # ======================================================
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates curl && \
@@ -65,33 +71,39 @@ https://download.docker.com/linux/debian bookworm stable" \
     rm -rf /var/lib/apt/lists/*
 
 # ======================================================
-# Docker CLI sanity check (non-fatal)
+# Plex Media Server (HEADLESS INSTALL)
 #
-# Verifies:
-#  - docker binary exists
-#  - version is visible in build logs
-#
-# NOTE:
-#  - Docker daemon is NOT expected to be running
-#  - docker --version does NOT require the daemon
+# IMPORTANT:
+#  - Plex is NEVER started
+#  - Ports are NOT exposed
+#  - This exists ONLY to provide:
+#      * Plex SQLite extensions
+#      * Plex collations / tokenizers
 # ======================================================
-RUN command -v docker && docker --version || true
+ENV PLEX_DOWNLOAD="https://downloads.plex.tv/plex-media-server-new"
+ENV PLEX_ARCH="amd64"
+
+RUN set -eux; \
+    PLEX_VERSION="$(curl -fsSL https://plex.tv/api/downloads/5.json \
+      | grep -oP '"version":"\K[^"]+' | head -1)"; \
+    curl -fsSL \
+      "${PLEX_DOWNLOAD}/${PLEX_VERSION}/debian/plexmediaserver_${PLEX_VERSION}_${PLEX_ARCH}.deb" \
+      -o /tmp/plex.deb; \
+    dpkg -i /tmp/plex.deb || true; \
+    apt-get -f install -y; \
+    rm -f /tmp/plex.deb; \
+    rm -rf /var/lib/apt/lists/*
 
 # ======================================================
 # SQLite ICU sanity check (non-fatal)
-#
-# Entry point handles runtime safety.
-# This only verifies ICU symbols exist.
 # ======================================================
 RUN sqlite3 :memory: "SELECT icu_load_collation('en_US','test');" || true
 
 # ======================================================
-# ChuckPa DBRepair script (for parity & manual use)
+# ChuckPa DBRepair script (parity only)
 #
-# IMPORTANT:
-#  - Downloaded verbatim
-#  - NOT executed automatically
-#  - Available in manual mode for audit/debug
+# NOT executed automatically.
+# Available in manual mode for inspection.
 # ======================================================
 WORKDIR /opt/dbrepair
 
@@ -102,21 +114,6 @@ RUN curl -fsSL \
 
 # ======================================================
 # Entrypoint
-#
-# Implements:
-#  - Native SQLite operations
-#  - ICU-safe behavior
-#  - Plex container self-protection
-#  - Modes:
-#      * automatic (check → vacuum → reindex)
-#      * check
-#      * vacuum
-#      * repair
-#      * reindex
-#      * deflate
-#      * prune
-#      * manual
-#  - Optional backup / restore
 # ======================================================
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
