@@ -9,6 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # ======================================================
 # Runtime dependencies (Docker CLI via docker.io)
 # ======================================================
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         bash \
@@ -19,8 +20,13 @@ RUN apt-get update && \
         util-linux \
         procps \
         gzip \
+        libsqlite3-mod-icu \
+        findutils \
+        grep \
+        awk \
         docker.io \
     && rm -rf /var/lib/apt/lists/*
+	
 
 # ======================================================
 # DBRepair setup
