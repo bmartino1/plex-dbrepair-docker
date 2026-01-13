@@ -4,10 +4,9 @@ set -euo pipefail
 ############################################################
 # Plex Database Repair – Native Docker Implementation
 #
-# - Uses Plex-installed SQLite extensions + ICU
-# - Safe one-shot execution (unless manual)
-# - ChuckPa-style conservative flow
-# - Explicit step-by-step logging
+# ChuckPa-aligned behavior:
+# - Run real SQLite commands and fail only if they fail
+# - Prefer Plex SQLite, fallback to system sqlite
 ############################################################
 
 # ---------------------------------------------------------
@@ -16,23 +15,19 @@ set -euo pipefail
 : "${DBREPAIR_MODE:=automatic}"        # automatic|check|vacuum|repair|reindex|deflate|prune|manual
 : "${ENABLE_BACKUPS:=true}"            # true|false
 : "${RESTORE_LAST_BACKUP:=false}"      # true|false
-
 : "${ALLOW_PLEX_KILL:=true}"
 : "${RESTART_PLEX:=true}"
 
 : "${PLEX_MOUNT:=/config}"
 : "${PLEX_REL:=Library/Application Support/Plex Media Server}"
-
 : "${PRUNE_DAYS:=30}"
 : "${PLEX_CONTAINER_MATCH:=plex}"
 
 : "${EXCLUDE_CONTAINER_NAMES:=dbrepair,plex-dbrepair}"
 : "${EXCLUDE_IMAGE_REGEX:=plex-dbrepair}"
 
-SQLITE="/usr/bin/sqlite3"
-
 # ---------------------------------------------------------
-# Derived paths
+# Paths
 # ---------------------------------------------------------
 PLEX_ROOT="${PLEX_MOUNT}/${PLEX_REL}"
 DBDIR="${PLEX_ROOT}/Plug-in Support/Databases"
@@ -48,12 +43,10 @@ BACKUP_DIR="${BACKUP_ROOT}/${TS}"
 STOPPED_IDS_FILE="/tmp/plex_stopped_ids.txt"
 
 # ---------------------------------------------------------
-# Helpers
+# Logging helpers
 # ---------------------------------------------------------
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 die() { log "FATAL: $*"; exit 1; }
-
-need_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
 
 section() {
   log "=================================================="
@@ -62,64 +55,69 @@ section() {
 }
 
 step() {
-  # Usage: step "Vacuum" "$DBFILE"
   log "$(printf '%-8s' "$1") : $(basename "$2")"
 }
 
 final_log() {
   log "=================================================="
-  log " DBRepair completed successfully"
+  log " DBRepair completed"
   log " Log     : $LOGFILE"
   log " Backups : $BACKUP_ROOT"
   log "=================================================="
 }
 
-docker_available() {
-  [[ -S /var/run/docker.sock ]] && command -v docker >/dev/null 2>&1
-}
+# ---------------------------------------------------------
+# SQLite selection (ChuckPa style)
+# ---------------------------------------------------------
+if [[ -x "/usr/lib/plexmediaserver/Plex SQLite" ]]; then
+  SQLITE="/usr/lib/plexmediaserver/Plex SQLite"
+  SQLITE_KIND="plex"
+else
+  SQLITE="$(command -v sqlite3 || true)"
+  SQLITE_KIND="system"
+fi
+
+[[ -x "$SQLITE" ]] || die "No usable SQLite binary found"
 
 # ---------------------------------------------------------
-# Safety checks
+# Safety checks (minimal)
 # ---------------------------------------------------------
-need_cmd tee awk grep find cp mv ls screen "$SQLITE"
-
 [[ -d "$DBDIR" ]]  || die "DBDIR missing: $DBDIR"
 [[ -f "$LIB_DB" ]] || die "Main DB missing"
-[[ -w "$DBDIR" ]]  || die "DBDIR not writable (UID/GID mismatch?)"
+[[ -w "$DBDIR" ]]  || die "DBDIR not writable"
 
-# Mirror all output
+# ---------------------------------------------------------
+# ChuckPa TMPDIR handling (CRITICAL)
+# ---------------------------------------------------------
+DBTMP="./dbtmp"
+mkdir -p "$DBDIR/$DBTMP"
+
+export TMPDIR="$DBTMP"
+export TMP="$DBTMP"
+
+# ---------------------------------------------------------
+# Mirror output to logfile
+# ---------------------------------------------------------
 exec > >(tee -a "$LOGFILE") 2>&1
 
+# ---------------------------------------------------------
+# Header
+# ---------------------------------------------------------
 section "Plex DBRepair – Native Docker"
 log " Mode                : $DBREPAIR_MODE"
 log " Plex Root           : $PLEX_ROOT"
 log " Databases           : $DBDIR"
-log " SQLite              : $SQLITE"
+log " SQLite              : $SQLITE ($SQLITE_KIND)"
 log " Backups Enabled     : $ENABLE_BACKUPS"
 log " Restore Last Backup : $RESTORE_LAST_BACKUP"
 
 # ---------------------------------------------------------
-# ICU auto-detection (silent, safe)
+# Docker helpers
 # ---------------------------------------------------------
-db_requires_icu() {
-  "$SQLITE" "$LIB_DB" \
-    "SELECT 1 FROM pragma_collation_list WHERE name LIKE 'icu_%' LIMIT 1;" \
-    | grep -q '^1$'
+docker_available() {
+  [[ -S /var/run/docker.sock ]] && command -v docker >/dev/null 2>&1
 }
 
-sqlite_has_icu() {
-  "$SQLITE" :memory: \
-    "SELECT icu_load_collation('en_US','icu_test');" \
-    >/dev/null 2>&1
-}
-
-if db_requires_icu && sqlite_has_icu; then
-  export SQLITE_ICU=1
-fi
-
-# ---------------------------------------------------------
-# Docker Plex stop/start (self-safe)
-# ---------------------------------------------------------
 stop_plex_containers() {
   : > "$STOPPED_IDS_FILE"
 
@@ -142,7 +140,7 @@ stop_plex_containers() {
     for ex in "${EXCL[@]}"; do
       [[ "$name" == "$ex" ]] && { log "Skipping excluded container: $name"; continue 2; }
     done
-    echo "$image" | grep -qiE "$EXCLUDE_IMAGE_REGEX" && { log "Skipping excluded image: $image"; continue; }
+    echo "$image" | grep -qiE "$EXCLUDE_IMAGE_REGEX" && continue
     echo "$name $image" | grep -qiE "$PLEX_CONTAINER_MATCH" || continue
 
     log "Stopping Plex container: $name ($cid)"
@@ -154,7 +152,10 @@ stop_plex_containers() {
 restart_plex_containers() {
   [[ "$RESTART_PLEX" != "true" ]] && return
   docker_available || return
-  [[ -s "$STOPPED_IDS_FILE" ]] || { log "No Plex containers were stopped — nothing to restart"; return; }
+  [[ -s "$STOPPED_IDS_FILE" ]] || {
+    log "No Plex containers were stopped — nothing to restart"
+    return
+  }
 
   section "Restarting Plex containers"
   while read -r cid; do
@@ -175,14 +176,16 @@ latest_backup_dir() {
 restore_last_backup() {
   local last
   last="$(latest_backup_dir)"
-  [[ -d "$last" ]] || die "No backups found under $BACKUP_ROOT"
+  [[ -d "$last" ]] || die "No backups found"
   section "Restore last backup"
-  log "Restoring from: $last"
   cp -a "$last"/* "$DBDIR/"
 }
 
 backup_all() {
-  [[ "$ENABLE_BACKUPS" != "true" ]] && { log "Backups disabled — skipping"; return; }
+  [[ "$ENABLE_BACKUPS" != "true" ]] && {
+    log "Backups disabled — skipping"
+    return
+  }
 
   section "Backup databases"
   mkdir -p "$BACKUP_DIR"
@@ -199,7 +202,7 @@ backup_all() {
 }
 
 # ---------------------------------------------------------
-# SQLite workers (NO logging inside)
+# SQLite workers (fail naturally)
 # ---------------------------------------------------------
 checkpoint_db() {
   [[ -f "$1-wal" ]] && "$SQLITE" "$1" "PRAGMA wal_checkpoint(TRUNCATE);" || true
@@ -212,7 +215,7 @@ reindex_db() { checkpoint_db "$1"; "$SQLITE" "$1" "REINDEX;"; }
 deflate_db() {
   checkpoint_db "$1"
   local tmp="$1.tmp"
-  rm -f "$tmp" || true
+  rm -f "$tmp"
   "$SQLITE" "$1" "VACUUM INTO '$tmp';"
   mv -f "$tmp" "$1"
 }
@@ -222,11 +225,11 @@ deflate_db() {
 # ---------------------------------------------------------
 stop_plex_containers
 
-if [[ "$RESTORE_LAST_BACKUP" == "true" ]]; then
+[[ "$RESTORE_LAST_BACKUP" == "true" ]] && {
   restore_last_backup
   final_log
   exit 0
-fi
+}
 
 case "$DBREPAIR_MODE" in
   manual)
@@ -234,7 +237,6 @@ case "$DBREPAIR_MODE" in
     log "Starting detached screen session"
     screen -dmS dbrepair bash -i
     log "Attach with: screen -r dbrepair"
-    log "Container will remain running"
     tail -f /dev/null
     ;;
 
@@ -270,7 +272,7 @@ case "$DBREPAIR_MODE" in
     ;;
 
   deflate)
-    section "Deflate (VACUUM INTO)"
+    section "Deflate"
     backup_all
     step "Deflate" "$LIB_DB";  deflate_db "$LIB_DB"
     step "Deflate" "$BLOB_DB"; deflate_db "$BLOB_DB"
