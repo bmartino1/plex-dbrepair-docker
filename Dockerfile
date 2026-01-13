@@ -45,8 +45,6 @@ RUN apt-get update && \
         sqlite3 \
         libsqlite3-0 \
         libsqlite3-ext-icu \
-        libsqlite3-mod-fts5 \
-        libsqlite3-mod-json1 \
         libsqlite3-mod-spatialite \
     && rm -rf /var/lib/apt/lists/*
 
