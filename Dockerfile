@@ -36,6 +36,7 @@ RUN apt-get update && \
         mawk \
         sqlite3 \
         libsqlite3-ext-icu \
+        mc \
     && rm -rf /var/lib/apt/lists/*
 
 # ======================================================
@@ -70,8 +71,8 @@ RUN sqlite3 :memory: "SELECT icu_load_collation('en_US','test');" || true
 # ChuckPa DBRepair script (for parity & manual use)
 #
 # IMPORTANT:
-#  - Downloaded verbatim
-#  - NOT executed automatically
+#  - Downloaded script for manual execution test
+#  - NOT executed automatically (due to expeint to be ran inside of plex)
 #  - Available in manual mode for audit/debug
 # ======================================================
 WORKDIR /opt/dbrepair
@@ -88,6 +89,7 @@ RUN curl -fsSL \
 #  - Native SQLite operations
 #  - ICU-safe behavior
 #  - Plex container self-protection
+#  - Modes: automatic (Check - Vacuum - Reindex) · check (integrity check only) · vacuum (vacuum database files) · repair (alias for vacuum / optimize) · reindex (rebuild indexes) · deflate (VACUUM INTO, rewrite database) · prune (clear PhotoTranscoder cache)
 #  - Optional backup / restore
 # ======================================================
 COPY entrypoint.sh /entrypoint.sh
