@@ -3,6 +3,13 @@ set -euo pipefail
 
 ############################################################
 # Plex Database Repair – Native Docker Implementation
+#
+# - Operates on a mounted Plex data dir (default: /config)
+# - Uses system sqlite3 (ICU-enabled via Dockerfile)
+# - One-shot execution unless DBREPAIR_MODE=manual
+# - Optional backups (on by default) + optional restore
+# - Optional stop/start Plex containers via docker.sock
+# - Self-protection to avoid stopping this dbrepair container
 ############################################################
 
 # ---------------------------------------------------------
@@ -12,8 +19,8 @@ set -euo pipefail
 : "${ENABLE_BACKUPS:=true}"            # true|false
 : "${RESTORE_LAST_BACKUP:=false}"      # true|false
 
-: "${ALLOW_PLEX_KILL:=true}"
-: "${RESTART_PLEX:=true}"
+: "${ALLOW_PLEX_KILL:=true}"           # true|false
+: "${RESTART_PLEX:=true}"              # true|false
 
 : "${PLEX_MOUNT:=/config}"
 : "${PLEX_REL:=Library/Application Support/Plex Media Server}"
@@ -21,11 +28,11 @@ set -euo pipefail
 : "${PRUNE_DAYS:=30}"
 
 # Plex container detection
-: "${PLEX_CONTAINER_MATCH:=plex}"
+: "${PLEX_CONTAINER_MATCH:=plex}"      # regex (case-insensitive) matched against "name image"
 
 # --- Self-protection ---
-: "${EXCLUDE_CONTAINER_NAMES:=dbrepair,plex-dbrepair}"
-: "${EXCLUDE_IMAGE_REGEX:=plex-dbrepair}"
+: "${EXCLUDE_CONTAINER_NAMES:=dbrepair,plex-dbrepair}"  # comma-separated exact names
+: "${EXCLUDE_IMAGE_REGEX:=plex-dbrepair}"              # regex matched against image
 
 SQLITE="/usr/bin/sqlite3"
 
@@ -58,31 +65,51 @@ docker_sock_available() {
   [[ -S /var/run/docker.sock ]] && need_cmd docker
 }
 
+# Pretty, consistent per-step logging
+step() {
+  # Usage: step "Vacuum" "/path/to/db"
+  log "$(printf '%-8s' "$1") : $(basename "$2")"
+}
+
+section() {
+  log "=================================================="
+  log " $*"
+  log "=================================================="
+}
+
+final_log() {
+  log "=================================================="
+  log " DBRepair completed successfully"
+  log " Log     : $LOGFILE"
+  log " Backups : $BACKUP_ROOT"
+  log "=================================================="
+}
+
 # ---------------------------------------------------------
 # Safety checks
 # ---------------------------------------------------------
 need_cmd tee awk grep find cp mv ls
 
-[[ -x "$SQLITE" ]] || die "sqlite3 missing"
+[[ -x "$SQLITE" ]] || die "sqlite3 missing at $SQLITE"
 [[ -d "$DBDIR" ]]  || die "DBDIR missing: $DBDIR"
-[[ -f "$LIB_DB" ]] || die "Main DB missing"
-[[ -w "$DBDIR" ]]  || die "DBDIR not writable (UID/GID mismatch)"
+[[ -f "$LIB_DB" ]] || die "Main DB missing: $LIB_DB"
+[[ -w "$DBDIR" ]]  || die "DBDIR not writable (UID/GID mismatch?)"
 
-# Mirror all output
+# Mirror all output to docker logs + logfile
 exec > >(tee -a "$LOGFILE") 2>&1
 
-log "=================================================="
-log " Plex DBRepair – Native Docker"
-log "=================================================="
+section "Plex DBRepair – Native Docker"
 log " Mode                : $DBREPAIR_MODE"
 log " Plex Root           : $PLEX_ROOT"
 log " Databases           : $DBDIR"
+log " SQLite              : $SQLITE"
 log " Backups Enabled     : $ENABLE_BACKUPS"
 log " Restore Last Backup : $RESTORE_LAST_BACKUP"
-log "=================================================="
+log "--------------------------------------------------"
 
 # ---------------------------------------------------------
 # ICU auto-detection (SILENT, SAFE)
+# (No errors/logging if ICU missing; Dockerfile should provide ICU)
 # ---------------------------------------------------------
 db_requires_icu() {
   "$SQLITE" "$LIB_DB" \
@@ -99,8 +126,6 @@ sqlite_has_icu() {
 if db_requires_icu && sqlite_has_icu; then
   export SQLITE_ICU=1
 fi
-# If DB does not require ICU, or sqlite lacks ICU, we continue safely
-# (Docker image is responsible for correctness)
 
 # ---------------------------------------------------------
 # Docker Plex stop/start (self-safe)
@@ -108,39 +133,70 @@ fi
 stop_plex_containers() {
   : > "$STOPPED_IDS_FILE"
 
-  [[ "$ALLOW_PLEX_KILL" != "true" ]] && return
-  docker_sock_available || return
+  if [[ "$ALLOW_PLEX_KILL" != "true" ]]; then
+    log "ALLOW_PLEX_KILL=false — skipping Plex stop"
+    return 0
+  fi
+
+  if ! docker_sock_available; then
+    log "docker.sock unavailable — skipping Plex stop"
+    return 0
+  fi
 
   IFS=',' read -ra EXCL <<< "$EXCLUDE_CONTAINER_NAMES"
 
+  section "Stopping Plex containers (match: ${PLEX_CONTAINER_MATCH})"
+
   docker ps --format '{{.ID}} {{.Names}} {{.Image}}' |
   while read -r cid name image; do
-
+    # Exclude by exact container name
     for ex in "${EXCL[@]}"; do
-      [[ "$name" == "$ex" ]] && continue 2
+      if [[ "$name" == "$ex" ]]; then
+        log "Skipping excluded container: $name"
+        continue 2
+      fi
     done
 
-    echo "$image" | grep -qiE "$EXCLUDE_IMAGE_REGEX" && continue
+    # Exclude by image regex
+    if echo "$image" | grep -qiE "$EXCLUDE_IMAGE_REGEX"; then
+      log "Skipping excluded image: $image"
+      continue
+    fi
+
+    # Match Plex containers
     echo "$name $image" | grep -qiE "$PLEX_CONTAINER_MATCH" || continue
 
-    log "Stopping Plex container: $name ($cid)"
+    log "Stopping Plex container: $name ($cid) image=$image"
     echo "$cid" >> "$STOPPED_IDS_FILE"
     docker stop "$cid" >/dev/null 2>&1 || true
   done
 }
 
 restart_plex_containers() {
-  [[ "$RESTART_PLEX" != "true" ]] && return
-  docker_sock_available || return
-  [[ ! -s "$STOPPED_IDS_FILE" ]] && return
+  if [[ "$RESTART_PLEX" != "true" ]]; then
+    log "RESTART_PLEX=false — skipping Plex restart"
+    return 0
+  fi
 
-  log "Restarting Plex containers..."
+  docker_sock_available || {
+    log "docker.sock unavailable — skipping Plex restart"
+    return 0
+  }
+
+  [[ -s "$STOPPED_IDS_FILE" ]] || {
+    log "No Plex containers were stopped — nothing to restart"
+    return 0
+  }
+
+  section "Restarting Plex containers"
   while read -r cid; do
+    [[ -n "${cid:-}" ]] || continue
     docker start "$cid" >/dev/null 2>&1 || true
     log "Started: $cid"
   done < "$STOPPED_IDS_FILE"
 }
 
+# Ensure restart happens even if DB ops fail
 trap 'rc=$?; restart_plex_containers || true; exit $rc' EXIT
 
 # ---------------------------------------------------------
@@ -153,50 +209,68 @@ latest_backup_dir() {
 restore_last_backup() {
   local last
   last="$(latest_backup_dir)"
-  [[ -d "$last" ]] || die "No backups found"
+  [[ -d "$last" ]] || die "No backups found under $BACKUP_ROOT"
 
-  log "Restoring backup: $last"
+  section "Restore last backup"
+  log "Restoring from: $last"
   cp -a "$last"/* "$DBDIR/"
+  log "Restore complete"
 }
 
 backup_all() {
-  [[ "$ENABLE_BACKUPS" != "true" ]] && return
+  if [[ "$ENABLE_BACKUPS" != "true" ]]; then
+    log "Backups disabled — skipping"
+    return 0
+  fi
 
+  section "Backup databases"
   mkdir -p "$BACKUP_DIR"
   chmod 700 "$BACKUP_DIR" || true
 
+  local copied=0
   for f in \
     "$LIB_DB" "$BLOB_DB" \
     "$LIB_DB-wal" "$LIB_DB-shm" \
     "$BLOB_DB-wal" "$BLOB_DB-shm"
   do
-    [[ -f "$f" ]] && cp -a "$f" "$BACKUP_DIR/"
+    if [[ -f "$f" ]]; then
+      log "Backup   : $(basename "$f")"
+      cp -a "$f" "$BACKUP_DIR/"
+      copied=$((copied+1))
+    fi
   done
+
+  log "Backup dir: $BACKUP_DIR ($copied file(s))"
 }
 
 # ---------------------------------------------------------
-# SQLite operations
+# SQLite operations (workers: no logging here)
 # ---------------------------------------------------------
 checkpoint_db() {
   [[ -f "$1-wal" ]] && "$SQLITE" "$1" "PRAGMA wal_checkpoint(TRUNCATE);" || true
 }
 
-check_db()   { log "Check: $(basename "$1")"; "$SQLITE" "$1" "PRAGMA integrity_check(1);"; }
-vacuum_db()  { checkpoint_db "$1"; log "Vacuum: $(basename "$1")"; "$SQLITE" "$1" "VACUUM;"; }
-reindex_db() { checkpoint_db "$1"; log "Reindex: $(basename "$1")"; "$SQLITE" "$1" "REINDEX;"; }
+check_db()   { "$SQLITE" "$1" "PRAGMA integrity_check(1);"; }
+vacuum_db()  { checkpoint_db "$1"; "$SQLITE" "$1" "VACUUM;"; }
+reindex_db() { checkpoint_db "$1"; "$SQLITE" "$1" "REINDEX;"; }
 
 deflate_db() {
   checkpoint_db "$1"
   local tmp="$1.tmp"
-  log "Deflate: $(basename "$1")"
+  rm -f "$tmp" || true
   "$SQLITE" "$1" "VACUUM INTO '$tmp';"
   mv -f "$tmp" "$1"
 }
 
 prune_cache() {
-  local cache="$PLEX_ROOT/Cache/PhotoTranscoder"
-  [[ -d "$cache" ]] || return
-  find "$cache" -type f -mtime "+${PRUNE_DAYS}" -delete || true
+  local cache="${PLEX_ROOT}/Cache/PhotoTranscoder"
+  if [[ ! -d "$cache" ]]; then
+    log "Prune    : PhotoTranscoder cache missing — skipping"
+    return 0
+  fi
+  section "Prune PhotoTranscoder cache"
+  log "Prune days: $PRUNE_DAYS"
+  find "$cache" -type f -mtime "+${PRUNE_DAYS}" -print -delete || true
 }
 
 # ---------------------------------------------------------
@@ -206,43 +280,75 @@ stop_plex_containers
 
 if [[ "$RESTORE_LAST_BACKUP" == "true" ]]; then
   restore_last_backup
-  log "Restore complete"
+  final_log
   exit 0
 fi
 
 case "$DBREPAIR_MODE" in
   manual)
-    log "Entering manual shell"
+    section "Manual mode"
+    log "Entering manual shell (Plex library mounted under: $PLEX_MOUNT)"
     exec bash
     ;;
+
   check)
-    check_db "$LIB_DB"; check_db "$BLOB_DB"
+    section "Integrity check"
+    step "Check" "$LIB_DB";  check_db "$LIB_DB"
+    step "Check" "$BLOB_DB"; check_db "$BLOB_DB"
+    final_log
     ;;
+
   vacuum)
-    backup_all; vacuum_db "$LIB_DB"; vacuum_db "$BLOB_DB"
+    section "Vacuum"
+    backup_all
+    step "Vacuum" "$LIB_DB";  vacuum_db "$LIB_DB"
+    step "Vacuum" "$BLOB_DB"; vacuum_db "$BLOB_DB"
+    final_log
     ;;
+
   repair)
-    backup_all; vacuum_db "$LIB_DB"; vacuum_db "$BLOB_DB"
+    # In native sqlite terms: "repair/optimize" == VACUUM (+ checkpoint)
+    section "Repair / Optimize"
+    backup_all
+    step "Vacuum" "$LIB_DB";  vacuum_db "$LIB_DB"
+    step "Vacuum" "$BLOB_DB"; vacuum_db "$BLOB_DB"
+    final_log
     ;;
+
   reindex)
-    backup_all; reindex_db "$LIB_DB"; reindex_db "$BLOB_DB"
+    section "Reindex"
+    backup_all
+    step "Reindex" "$LIB_DB";  reindex_db "$LIB_DB"
+    step "Reindex" "$BLOB_DB"; reindex_db "$BLOB_DB"
+    final_log
     ;;
+
   deflate)
-    backup_all; deflate_db "$LIB_DB"; deflate_db "$BLOB_DB"
+    section "Deflate (VACUUM INTO)"
+    backup_all
+    step "Deflate" "$LIB_DB";  deflate_db "$LIB_DB"
+    step "Deflate" "$BLOB_DB"; deflate_db "$BLOB_DB"
+    final_log
     ;;
+
   prune)
     prune_cache
+    final_log
     ;;
+
   automatic|*)
+    section "Automatic (check → vacuum → reindex)"
     backup_all
-    check_db "$LIB_DB"; check_db "$BLOB_DB"
-    vacuum_db "$LIB_DB"; vacuum_db "$BLOB_DB"
-    reindex_db "$LIB_DB"; reindex_db "$BLOB_DB"
+
+    step "Check"   "$LIB_DB";  check_db "$LIB_DB"
+    step "Check"   "$BLOB_DB"; check_db "$BLOB_DB"
+
+    step "Vacuum"  "$LIB_DB";  vacuum_db "$LIB_DB"
+    step "Vacuum"  "$BLOB_DB"; vacuum_db "$BLOB_DB"
+
+    step "Reindex" "$LIB_DB";  reindex_db "$LIB_DB"
+    step "Reindex" "$BLOB_DB"; reindex_db "$BLOB_DB"
+
+    final_log
     ;;
 esac
-
-log "=================================================="
-log " DBRepair completed successfully"
-log " Log     : $LOGFILE"
-log " Backups : $BACKUP_ROOT"
-log "=================================================="
