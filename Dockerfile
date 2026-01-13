@@ -40,9 +40,14 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # ======================================================
-# Docker CLI (official, provides /usr/bin/docker)
+# Docker CLI (official)
 #
-# This is REQUIRED for:
+# IMPORTANT:
+# Docker does NOT publish a "sid" repo.
+# We intentionally use the BOOKWORM repo, which is
+# ABI-compatible with SID for the Docker CLI.
+#
+# This provides /usr/bin/docker for:
 #  - stopping Plex containers
 #  - restarting Plex containers
 # ======================================================
@@ -53,17 +58,30 @@ RUN apt-get update && \
         -o /etc/apt/keyrings/docker.asc && \
     chmod a+r /etc/apt/keyrings/docker.asc && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
-https://download.docker.com/linux/debian sid stable" \
+https://download.docker.com/linux/debian bookworm stable" \
         > /etc/apt/sources.list.d/docker.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends docker-ce-cli && \
     rm -rf /var/lib/apt/lists/*
 
 # ======================================================
+# Docker CLI sanity check (non-fatal)
+#
+# Verifies:
+#  - docker binary exists
+#  - version is visible in build logs
+#
+# NOTE:
+#  - Docker daemon is NOT expected to be running
+#  - docker --version does NOT require the daemon
+# ======================================================
+RUN command -v docker && docker --version || true
+
+# ======================================================
 # SQLite ICU sanity check (non-fatal)
 #
 # Entry point handles runtime safety.
-# This just confirms ICU symbols exist.
+# This only verifies ICU symbols exist.
 # ======================================================
 RUN sqlite3 :memory: "SELECT icu_load_collation('en_US','test');" || true
 
@@ -71,8 +89,8 @@ RUN sqlite3 :memory: "SELECT icu_load_collation('en_US','test');" || true
 # ChuckPa DBRepair script (for parity & manual use)
 #
 # IMPORTANT:
-#  - Downloaded script for manual execution test
-#  - NOT executed automatically (due to expeint to be ran inside of plex)
+#  - Downloaded verbatim
+#  - NOT executed automatically
 #  - Available in manual mode for audit/debug
 # ======================================================
 WORKDIR /opt/dbrepair
@@ -89,7 +107,15 @@ RUN curl -fsSL \
 #  - Native SQLite operations
 #  - ICU-safe behavior
 #  - Plex container self-protection
-#  - Modes: automatic (Check - Vacuum - Reindex) · check (integrity check only) · vacuum (vacuum database files) · repair (alias for vacuum / optimize) · reindex (rebuild indexes) · deflate (VACUUM INTO, rewrite database) · prune (clear PhotoTranscoder cache)
+#  - Modes:
+#      * automatic (check → vacuum → reindex)
+#      * check
+#      * vacuum
+#      * repair
+#      * reindex
+#      * deflate
+#      * prune
+#      * manual
 #  - Optional backup / restore
 # ======================================================
 COPY entrypoint.sh /entrypoint.sh
