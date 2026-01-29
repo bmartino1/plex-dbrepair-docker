@@ -19,12 +19,17 @@ Please review the upstream project documentation to understand **what the tool d
 
 ## What This Container Does
 
-- Runs `DBRepair.sh` inside a controlled Docker environment  
-- Provides a real TTY using `expect` (required by the script)  
-- Automatically responds to required interactive prompts  
-- Emits heartbeat status messages while the repair is running  
-- Writes a persistent log file and mirrors output to Docker logs  
-- Exits automatically when the repair completes  
+- Runs DBRepair.sh adjacent code inside a controlled Docker environment
+- Writes a persistent log file and mirrors output to Docker logs
+- Exits automatically when the repair completes
+- if variables enabled, it will also:
+   - backup (file copy) the current database.
+   - stop other plex dockers from running
+
+with unraid variables for prune picture cache and db file restore(if you used this docker to make the backup...)
+see 
+- **Unraid Support Thread:**  
+  https://forums.unraid.net/topic/196453-support-plex-db-repair-docker/#findComment-1601211
 
 ---
 
