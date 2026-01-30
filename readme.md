@@ -97,18 +97,25 @@ services:
 
 ## Environment Variables
 
+* No netowrk is needed for this docker.
+* continer needs Plex appdata path set contner needs to see /config/Library/...Plex Nested folders
+
 **Quick Table Min**
 
-| Variable               | Description                                    |
-| ---------------------- | ---------------------------------------------- |
-| `DBREPAIR_MODE`        | `automatic` or `manual`                        |
-| `ALLOW_PLEX_KILL`      | Allow the container to stop Plex during repair |
-| `PLEX_CONTAINER_MATCH` | Substring used to locate the Plex container    |
-| `RESTART_PLEX`         | Restart Plex after repair completes            |
-| `PRUNE_DAYS`           | Remove logs older than N days                  |
-| `ENABLE_BACKUPS`       | Enable Plex database backups                   |
-| `RESTORE_LAST_BACKUP`  | Restore the most recent backup                 |
-| `TZ`                   | Container timezone                             |
+```text
+| ---------------------- | ------------------------------------------------------------------- |
+| Variable               | Description                                                         |
+| ---------------------- | ------------------------------------------------------------------- |
+| `DBREPAIR_MODE`        | `automatic` or `manual`                                             |
+| `ALLOW_PLEX_KILL`      | T/F Let this container stop Plex during repair                      |
+| `PLEX_CONTAINER_MATCH` | Dfine Name to locate the Plex container to kill                     |
+| `RESTART_PLEX`         | Restart killed Plex after repair completes                          |
+| `PRUNE_DAYS`           | (requiers DBREPAIR set to prune) # N days age to remove             |
+| `ENABLE_BACKUPS`       | T/F Enable Plex database backups (File copy in a sub directory)     |
+| `RESTORE_LAST_BACKUP`  | T/F Restore the most recent backup (Overrides options for restore   |
+| `TZ`                   | Container timezone/Time stamp                                       |
+| ---------------------- | ------------------------------------------------------------------- |
+```
 
 ---
 
@@ -133,7 +140,7 @@ Unless otherwise noted, Plex containers will be stopped before execution and res
 | `prune`     | — | Prune PhotoTranscoder cache files older than `PRUNE_DAYS` |
 | `manual`    | — | Launch interactive shell inside container (no automation) more for testing.  |
 
-* Manual: one could then run the chuckpa shped script or use docker connect,update and  comands and potental db reapir run
+* Manual: one could then run the chuckpa shipped script or use docker CLI to connect, update, and run other comands for your plex
 
 ---
 
