@@ -131,7 +131,9 @@ Unless otherwise noted, Plex containers will be stopped before execution and res
 | `reindex`   | 6 | Rebuild all database indexes |
 | `deflate`   | — | Rewrite database using `VACUUM INTO` to fully compact |
 | `prune`     | — | Prune PhotoTranscoder cache files older than `PRUNE_DAYS` |
-| `manual`    | — | Launch interactive shell inside container (no automation) more for testing docker conect update comands and potental db reapir run |
+| `manual`    | — | Launch interactive shell inside container (no automation) more for testing.  |
+
+* Manual: one could then run the chuckpa shped script or use docker connect,update and  comands and potental db reapir run
 
 ---
 
@@ -140,10 +142,12 @@ Unless otherwise noted, Plex containers will be stopped before execution and res
 
 **Description:**  
 If enabled, all Plex database files (including WAL/SHM files) are backed up before any write operation.
-Backups are stored under:
+Backups are stored under the nested database foldder:
+
 "<PLEX_DB_DIR>/dbrepair-backups/<timestamp>/"
 
-You mount what becomes the PLEX_DB_DIR
+You mount what becomes the PLEX_DB_DIR...
+
 ---
 
 ### RESTORE_LAST_BACKUP
