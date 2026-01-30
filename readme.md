@@ -122,6 +122,7 @@ services:
 ### DBREPAIR_MODE
 
 **Default:** `automatic`
+* Must supply only 1 option... will fall back to automatic...
 
 **Description:**  
 Selects which Plex database maintenance operation to run.
