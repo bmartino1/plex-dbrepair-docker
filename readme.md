@@ -27,17 +27,21 @@ Please review the upstream project documentation to understand **what the tool d
    - stop other plex dockers from running
 
 with unraid variables for prune picture cache and db file restore(if you used this docker to make the backup...)
-see 
+see unraid support...
+
+## Support
+
 - **Unraid Support Thread:**  
   https://forums.unraid.net/topic/196453-support-plex-db-repair-docker/#findComment-1601211
+
 
 ---
 
 ## Requirements
 
 - Docker
-- Access to the Docker socket (used to stop/start Plex if enabled)
-- Plex Media Server running in a Docker container
+- Access to the Docker socket (used to stop/start Plex if enabled) usualy host "/var/run/docker.sock"
+- Plex Media Server running in a Docker container stoped and its Libray folder mounted to this docker at /config
 
 ---
 
@@ -58,7 +62,7 @@ docker run -d \
   -e RESTORE_LAST_BACKUP="false" \
   -e EXCLUDE_CONTAINER_NAMES="dbrepair,plex-dbrepair" \
   -e EXCLUDE_IMAGE_REGEX="plex-dbrepair" \
-  -v /mnt/user/appdata/dbrepair:/config:rw \
+  -v /mnt/user/appdata/plex:/config:rw \
   -v /var/run/docker.sock:/var/run/docker.sock:rw \
   bmmbmm01/plex-dbrepair
 ```
@@ -93,6 +97,8 @@ services:
 
 ## Environment Variables
 
+**Quick Table Min**
+
 | Variable               | Description                                    |
 | ---------------------- | ---------------------------------------------- |
 | `DBREPAIR_MODE`        | `automatic` or `manual`                        |
@@ -106,8 +112,119 @@ services:
 
 ---
 
-## Support
+### DBREPAIR_MODE
 
-- **Unraid Support Thread:**  
-  https://forums.unraid.net/topic/196453-support-plex-db-repair-docker/#findComment-1601211
+**Default:** `automatic`
 
+**Description:**  
+Selects which Plex database maintenance operation to run.
+
+All modes operate directly on the mounted Plex database directory using SQLite.
+Unless otherwise noted, Plex containers will be stopped before execution and restarted afterward (if enabled).
+
+| Value       | Menu # | Action Description |
+|------------|--------|--------------------|
+| `automatic` | 2 | Full maintenance run: integrity check → VACUUM → reindex |
+| `check`     | 3 | Perform SQLite integrity check only (read-only) |
+| `vacuum`    | 4 | Vacuum databases to reclaim unused space |
+| `repair`    | 5 | Repair / optimize databases (VACUUM) |
+| `reindex`   | 6 | Rebuild all database indexes |
+| `deflate`   | — | Rewrite database using `VACUUM INTO` to fully compact |
+| `prune`     | — | Prune PhotoTranscoder cache files older than `PRUNE_DAYS` |
+| `manual`    | — | Launch interactive shell inside container (no automation) more for testing docker conect update comands and potental db reapir run |
+
+---
+
+### ENABLE_BACKUPS
+**Default:** `true`
+
+**Description:**  
+If enabled, all Plex database files (including WAL/SHM files) are backed up before any write operation.
+Backups are stored under:
+"<PLEX_DB_DIR>/dbrepair-backups/<timestamp>/"
+
+You mount what becomes the PLEX_DB_DIR
+---
+
+### RESTORE_LAST_BACKUP
+
+**Default:** `false`
+
+**Description:**  
+Restores the most recent backup from `dbrepair-backups` and exits immediately.
+No repair actions are performed when this option is enabled. skips DBREPAIR_MODE setting when true... File copies the backup made with this docker back into plex.
+
+---
+
+### ALLOW_PLEX_KILL
+
+**Default:** `true`
+
+**Description:**  
+If enabled, the container will attempt to stop running Plex containers before performing database operations.
+This prevents database corruption during maintenance. it also requries the docker sock mounted to this docker.
+
+---
+
+### RESTART_PLEX
+
+**Default:** `true`
+
+**Description:**  
+If enabled, Plex containers that were stopped by DBRepair will be restarted automatically on exit.
+
+---
+
+### PLEX_CONTAINER_MATCH
+
+**Default:** `plex`
+
+**Description:**  
+Case-insensitive substring match used to identify Plex containers.
+Both container name and image name are checked.
+*its best to but hte plex docker image here... or don't call at all and stop them before running this docker
+
+Example:
+plex
+plexmediaserver
+linuxserver/plex
+
+---
+
+### EXCLUDE_CONTAINER_NAMES
+
+**Default:** `dbrepair,plex-dbrepair`
+
+**Description:**  
+Comma-separated list of container names that should never be stopped.
+
+---
+
+### EXCLUDE_IMAGE_REGEX
+
+**Default:** `plex-dbrepair`
+
+**Description:**  
+Regular expression used to exclude container images from being stopped. even if this is not called its in the docker to not kill itself...
+
+---
+
+### PRUNE_DAYS
+
+**Default:** `30`
+
+**Description:**  
+Number of days to retain files in Plex’s PhotoTranscoder cache when using `DBREPAIR_MODE=prune`.
+*Is only required when DBREPAIR_MODE=prune default 30 days
+
+---
+
+### TZ
+
+**Default:** *(not set)*
+
+**Description:**  
+Container timezone (used for logging and timestamps).
+
+Example:
+America/Chicago
