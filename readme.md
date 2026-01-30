@@ -106,7 +106,7 @@ services:
 | ---------------------- | ------------------------------------------------------------------- |
 | Variable               | Description                                                         |
 | ---------------------- | ------------------------------------------------------------------- |
-| `DBREPAIR_MODE`        | `automatic` or `manual`                                             |
+| `DBREPAIR_MODE`        | `automatic` / `check` / `prune` / see more options below            |
 | `ALLOW_PLEX_KILL`      | T/F Let this container stop Plex during repair                      |
 | `PLEX_CONTAINER_MATCH` | Dfine Name to locate the Plex container to kill                     |
 | `RESTART_PLEX`         | Restart killed Plex after repair completes                          |
