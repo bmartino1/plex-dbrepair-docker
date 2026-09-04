@@ -1,3 +1,5 @@
+# Warning: not meant to be ran on latest Plex SQL changes to FTS...
+
 # YOU ARE RESPONSIBLE FOR YOUR OWN DATA.
 
 ⚠️ **This container modifies your Plex SQLite database.**  
