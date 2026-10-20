@@ -119,3 +119,45 @@ These tests do **not** prove repair of a corrupt database, actual cache deletion
 - [Docker image](https://hub.docker.com/r/bmmbmm01/plex-dbrepair)
 - [Project source](https://github.com/bmartino1/plex-dbrepair-docker)
 - [ChuckPa DBRepair](https://github.com/ChuckPa/DBRepair)
+
+### Docker Temporary Filesystem Compatibility
+
+Plex DBRepair copies the ChuckPa DBRepair executable into the running Plex container at `/tmp/plex-dbrepair-runner` and executes it using `docker exec`.
+
+**The Plex container must have a writable and executable `/tmp` directory.**
+
+If your Plex container uses a custom RAM-backed temporary filesystem (`tmpfs`) mounted at `/tmp`, it may prevent Docker from copying or executing the DBRepair executable.
+
+This can result in errors such as:
+
+```text
+Error: No such container:path
+ERROR: Cannot copy DBRepair to Plex
+```
+
+Or:
+
+```text
+permission denied
+```
+
+**Recommended solution:** Remove or disable custom `/tmp` tmpfs mounts in your Plex Docker configuration, then recreate the Plex container before retrying DBRepair.
+
+For Docker Compose, remove or comment out settings such as:
+
+```yaml
+tmpfs:
+  - /tmp:size=1g,mode=1777
+```
+
+You can check your Plex container's temporary filesystem configuration using:
+
+```bash
+docker exec plex grep ' /tmp ' /proc/mounts
+```
+
+If the output contains `noexec`, programs cannot execute directly from that filesystem.
+
+Plex DBRepair logs failures and exits if it cannot install or execute the repair utility. Database maintenance will not begin if executable staging fails.
+
+After correcting the Plex container configuration, run Plex DBRepair again.
