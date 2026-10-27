@@ -1,0 +1,31 @@
+## License and Upstream Attribution
+
+**Plex DBRepair Docker** is an independent Docker automation wrapper designed to simplify the use of ChuckPa's DBRepair utility, particularly for Unraid Community Applications users.
+
+### Upstream DBRepair
+
+DBRepair is developed and maintained by **ChuckPa**.
+
+- **Upstream project:** https://github.com/ChuckPa/DBRepair
+- **Original license:** https://github.com/ChuckPa/DBRepair/blob/main/LICENSE.txt
+- **Official releases:** https://github.com/ChuckPa/DBRepair/releases
+
+Copyright © 2022–2026 ChuckPa. All rights reserved.
+
+DBRepair is proprietary software provided free of charge for use with Plex Media Server. Redistribution requires express written permission from ChuckPa.
+
+All rights to the DBRepair executable, its associated trademarks, and upstream materials remain with ChuckPa.
+
+### Docker Wrapper
+
+The Dockerfile, entrypoint automation, and Unraid integration are maintained independently by bmartino1.
+
+This project does not modify, reverse-engineer, or claim ownership of ChuckPa's DBRepair executable. It packages the official upstream release and automates execution inside an existing Plex Docker container.
+
+Any license applied to this project's independently authored wrapper code does not apply to ChuckPa's DBRepair executable.
+
+### Disclaimer
+
+This project is an independent community integration and is not an official release of DBRepair or Plex Media Server.
+
+Users should consult the upstream license and documentation before using or redistributing DBRepair.
