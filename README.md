@@ -1,13 +1,11 @@
-# YOU ARE RESPONSIBLE FOR YOUR OWN DATA.
-
-⚠️ **This container modifies your Plex SQLite database.**  
-Always ensure you have **verified, working backups** before proceeding.
-
 # Plex DBRepair Docker
 
-One-shot Docker maintenance wrapper for [ChuckPa / DBRepair](https://github.com/ChuckPa/DBRepair). Image: [`bmmbmm01/plex-dbrepair`](https://hub.docker.com/r/bmmbmm01/plex-dbrepair). This rewrite packages **DBRepair v26.10.00**, not the old interactive `DBRepair.sh` or the previous custom SQLite/FTS maintenance routines.
+[![Docker Hub](https://img.shields.io/badge/Docker%20Hub-bmmbmm01%2Fplex--dbrepair-blue?logo=docker)](https://hub.docker.com/r/bmmbmm01/plex-dbrepair)
+[![GitHub](https://img.shields.io/badge/Source-bmartino1%2Fplex--dbrepair--docker-181717?logo=github)](https://github.com/bmartino1/plex-dbrepair-docker)
 
-> **Warning — you are responsible for your data.** This software can modify or rebuild Plex databases. Have a **separate, verified, restorable backup** before using it on a production library. This version was tested on a *fresh LinuxServer Plex test container*. Binhex and Hotio are intended targets but remain unverified. Consult [upstream DBRepair releases](https://github.com/ChuckPa/DBRepair/releases) for compatibility updates; do not assume future Plex schema/FTS changes are safe automatically.
+A one-shot Docker maintenance container for [ChuckPa's DBRepair](https://github.com/ChuckPa/DBRepair), designed to run database checks, maintenance, and repairs against an existing Plex Media Server Docker container. It packages **DBRepair v26.10.00** and uses the upstream DBRepair executable rather than the older interactive `DBRepair.sh` or previous custom SQLite/FTS maintenance routines.
+
+> ⚠️ **YOU ARE RESPONSIBLE FOR YOUR OWN DATA.** This tool can modify or rebuild your Plex SQLite databases. Always have a **separate, verified, restorable backup** before using it on a production library. Testing has been performed on a fresh LinuxServer Plex test container; Binhex and Hotio are intended targets but have not been verified. Check [upstream DBRepair releases](https://github.com/ChuckPa/DBRepair/releases) for compatibility information, especially after Plex database schema changes.
 
 ## How it works
 
