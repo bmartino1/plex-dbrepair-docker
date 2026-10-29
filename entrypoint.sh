@@ -122,17 +122,77 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-log "Plex DBRepair version: $(/opt/dbrepair/DBRepair --version 2>&1 | head -1 || true)"
 log "Target: name=$NAME image=$IMAGE id=$TARGET mode=$MODE"
 log "Paths: mount=$PLEX_MOUNT relative=$PLEX_REL databases=$DB_DIR"
 log "Mounts: $(docker inspect "$TARGET" | jq -c '.[0].Mounts | map({Type,Source,Destination,Mode,RW})')"
 log "Restart policy: $(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$TARGET")"
 log "Original Plex container running=$WAS_RUNNING"
 
+# Download official DBRepair release at runtime, for this end user's machine.
+# Do this BEFORE requesting Plex shutdown. Never ship a bundled DBRepair executable.
+# GitHub's release metadata is consulted each run, so a new release doesn't require
+# rebuilding this wrapper image. The zip is unpacked into temporary container space.
+download_dbrepair() {
+  local machine arch target_arch metadata tag asset url digest tmp
+  machine="$(uname -m)"
+  case "$machine" in
+    x86_64|amd64) arch=x86_64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    armv7l|armv7|armhf) arch=arm32 ;;
+    *) die "Unsupported DBRepair host architecture: $machine" ;;
+  esac
+
+  target_arch="$(docker image inspect "$(docker inspect -f '{{.Image}}' "$TARGET")" -f '{{.Architecture}}' 2>/dev/null || true)"
+  [[ -n "$target_arch" ]] || die "Cannot determine Plex image architecture"
+  case "$target_arch" in
+    amd64|x86_64) [[ "$arch" == x86_64 ]] || die "Plex architecture $target_arch differs from wrapper $machine" ;;
+    arm64|aarch64) [[ "$arch" == arm64 ]] || die "Plex architecture $target_arch differs from wrapper $machine" ;;
+    arm|arm32|armv7|armhf) [[ "$arch" == arm32 ]] || die "Plex architecture $target_arch differs from wrapper $machine" ;;
+    *) die "Unsupported Plex architecture: $target_arch" ;;
+  esac
+
+  log "Checking latest official DBRepair release for Linux-$arch"
+  metadata="$(curl --fail --silent --show-error --location --retry 3 --connect-timeout 15 --max-time 60 \
+    -H 'Accept: application/vnd.github+json' \
+    https://api.github.com/repos/ChuckPa/DBRepair/releases/latest)" || die "Could not retrieve official DBRepair release metadata"
+  tag="$(jq -er '.tag_name | select(type == "string" and test("^v[0-9]+([.][0-9]+)+$"))' <<<"$metadata")" || die "Invalid or missing DBRepair release tag"
+  asset="DBRepair-${tag#v}-Linux-$arch.zip"
+  url="$(jq -er --arg n "$asset" '.assets[] | select(.name == $n) | .browser_download_url | select(type == "string")' <<<"$metadata")" || die "Official release $tag has no $asset asset"
+  [[ "$url" == "https://github.com/ChuckPa/DBRepair/releases/download/$tag/$asset" ]] || die "Unexpected DBRepair release asset URL"
+  digest="$(jq -r --arg n "$asset" '[.assets[] | select(.name == $n) | .digest // empty][0] // empty' <<<"$metadata")"
+  tmp="$(mktemp -d /tmp/dbrepair-download.XXXXXXXX)" || die "Cannot create download directory"
+  mkdir -p /opt/dbrepair
+  log "Downloading official DBRepair $tag ($asset)"
+  if ! curl --fail --silent --show-error --location --retry 3 --connect-timeout 15 --max-time 300 \
+      "$url" -o "$tmp/DBRepair.zip"; then
+    rm -rf "$tmp"
+    die "DBRepair download failed; Plex was not stopped"
+  fi
+  if ! unzip -tq "$tmp/DBRepair.zip" >/dev/null; then
+    rm -rf "$tmp"
+    die "Invalid DBRepair release zip; Plex was not stopped"
+  fi
+  if [[ "$digest" == sha256:* ]]; then
+    if ! echo "${digest#sha256:}  $tmp/DBRepair.zip" | sha256sum -c -; then
+      rm -rf "$tmp"
+      die "DBRepair release checksum mismatch; Plex was not stopped"
+    fi
+  fi
+  # Only use the downloaded executable; do not execute archive-supplied scripts.
+  if ! unzip -j -o "$tmp/DBRepair.zip" DBRepair -d /opt/dbrepair >/dev/null; then
+    rm -rf "$tmp"
+    die "DBRepair executable missing from official zip"
+  fi
+  chmod 0755 /opt/dbrepair/DBRepair
+  rm -rf "$tmp"
+  log "DBRepair $tag downloaded from ChuckPa's official GitHub release"
+  log "DBRepair version: $(/opt/dbrepair/DBRepair --version 2>&1 | head -1 || true)"
+}
+
+download_dbrepair
+
 # DBRepair binary copied into target: no secondary Plex config mount on our side.
 # Native binary must match target machine architecture and target libc requirements.
-TARGET_ARCH="$(docker image inspect "$(docker inspect -f '{{.Image}}' "$TARGET")" -f '{{.Architecture}}' 2>/dev/null || true)"
-[[ -z "$TARGET_ARCH" || "$TARGET_ARCH" == "$(dpkg --print-architecture)" ]] || die "Architecture mismatch: Plex=$TARGET_ARCH repair=$(dpkg --print-architecture)"
 docker exec --user 0 "$TARGET" /bin/sh -c 'mkdir -p /tmp/plex-dbrepair-runner' || die "Cannot create runner directory in Plex"
 docker cp /opt/dbrepair/DBRepair "$TARGET:$REMOTE_BIN" || die "Cannot copy DBRepair to Plex"
 docker exec --user 0 "$TARGET" /bin/sh -c 'chmod 755 /tmp/plex-dbrepair-runner/DBRepair' || die 'Cannot chmod runner'
