@@ -3,7 +3,7 @@
 [![Docker Hub](https://img.shields.io/badge/Docker%20Hub-bmmbmm01%2Fplex--dbrepair-blue?logo=docker)](https://hub.docker.com/r/bmmbmm01/plex-dbrepair)
 [![GitHub](https://img.shields.io/badge/Source-bmartino1%2Fplex--dbrepair--docker-181717?logo=github)](https://github.com/bmartino1/plex-dbrepair-docker)
 
-A one-shot Docker maintenance container for [ChuckPa's DBRepair](https://github.com/ChuckPa/DBRepair), designed to run database checks, maintenance, and repairs against an existing Plex Media Server Docker container. It packages **DBRepair v26.10.00** and uses the upstream DBRepair executable rather than the older interactive `DBRepair.sh` or previous custom SQLite/FTS maintenance routines.
+A one-shot Docker maintenance container for [ChuckPa's DBRepair](https://github.com/ChuckPa/DBRepair), designed to run database checks, maintenance, and repairs against an existing Plex Media Server Docker container. It downloads the **latest official compiled DBRepair release at container runtime**, selecting the Linux package for the machine's architecture. The retired `DBRepair.sh` and earlier custom SQLite/FTS routines are not used. **The DBRepair binary is not included in this Docker image.**
 
 > ⚠️ **YOU ARE RESPONSIBLE FOR YOUR OWN DATA.** This tool can modify or rebuild your Plex SQLite databases. Always have a **separate, verified, restorable backup** before using it on a production library. Testing has been performed on a fresh LinuxServer Plex test container; Binhex and Hotio are intended targets but have not been verified. Check [upstream DBRepair releases](https://github.com/ChuckPa/DBRepair/releases) for compatibility information, especially after Plex database schema changes.
 
@@ -12,7 +12,7 @@ A one-shot Docker maintenance container for [ChuckPa's DBRepair](https://github.
 1. Connects to the Docker daemon through `/var/run/docker.sock` (not a second Docker daemon).
 2. Finds exactly **one running Plex container** with a database at the expected internal path; or selects an exact name from `PLEX_CONTAINER_NAME`.
 3. Reports target image, container ID, mounts, restart policy and database location in the logs.
-4. Copies the bundled `DBRepair` executable into the Plex container using `docker cp` and runs it with `docker exec`.
+4. Downloads the latest official compiled DBRepair release for the host/Plex architecture, verifies the ZIP archive (and SHA-256 digest when provided by GitHub), extracts the executable, then copies it into the Plex container using `docker cp` and runs it with `docker exec`. **If downloading fails, Plex is not stopped.**
 5. Requests graceful Plex Media Server shutdown through `DBRepair stop`, with a SIGTERM process fallback when allowed; verifies the PMS process has exited **and the container remains running**.
 6. Creates a verified cold `.tar.gz` database backup by default (except prune), runs the requested native DBRepair operation, and restarts the Plex Docker container on success if enabled.
 7. Exits automatically, writing Docker console output and a timestamped persistent log.
@@ -100,7 +100,7 @@ If Plex's internal process cannot be stopped without losing its Docker container
 
 ## Test history (LinuxServer Plex, disposable library)
 
-Tested against `lscr.io/linuxserver/plex`, PMS `1.43.4.10903`, using `bmmbmm01/plex-dbrepair:latest` with DBRepair `26.10.00`:
+**Historical test results (bundled DBRepair 26.10.00):** Tested against `lscr.io/linuxserver/plex`, PMS `1.43.4.10903`. The new runtime-download method and later upstream versions have not yet been validated against this test setup:
 
 - `automatic`: successful health checks and no orphaned items; operation exited `0`.
 - `vacuum`: Main and Blobs DB vacuum completed, post-operation verified, exited `0`.
@@ -110,6 +110,12 @@ Tested against `lscr.io/linuxserver/plex`, PMS `1.43.4.10903`, using `bmmbmm01/p
 - `prune`: completed with 0 files removed (empty test cache); exited `0`.
 
 These tests do **not** prove repair of a corrupt database, actual cache deletion, compatibility with other Plex image variants, or resilience to real-world large-library maintenance failures.
+
+## Upstream DBRepair download and licensing
+
+Following guidance from DBRepair's author, ChuckPa, the Docker image **does not bundle or redistribute** a DBRepair executable. Each container run fetches the current official GitHub release for its Linux architecture (`x86_64`, `arm64`, or `arm32`) and extracts the compiled executable to temporary container storage. It does not use the retired `DBRepair.sh`.
+
+A working connection to GitHub is required on every run. If the download, asset selection, archive check, or executable staging fails, maintenance does not begin. New upstream releases may change behavior or compatibility; check [ChuckPa's release notes and licensing](https://github.com/ChuckPa/DBRepair/releases) before running on important data. The end user is responsible for complying with the upstream DBRepair license. DBRepair's own update mechanism does not need to modify the container: the next run fetches the latest official release again.
 
 ## Support and upstream
 
