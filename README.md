@@ -2,6 +2,7 @@
 
 [![Docker Hub](https://img.shields.io/badge/Docker%20Hub-bmmbmm01%2Fplex--dbrepair-blue?logo=docker)](https://hub.docker.com/r/bmmbmm01/plex-dbrepair)
 [![GitHub](https://img.shields.io/badge/Source-bmartino1%2Fplex--dbrepair--docker-181717?logo=github)](https://github.com/bmartino1/plex-dbrepair-docker)
+[![Unraid](https://img.shields.io/badge/Platform-Unraid-F15A2C?logo=unraid)](https://unraid.net/)
 
 A one-shot Docker maintenance container for [ChuckPa's DBRepair](https://github.com/ChuckPa/DBRepair), designed to run database checks, maintenance, and repairs against an existing Plex Media Server Docker container. It downloads the **latest official compiled DBRepair release at container runtime**, selecting the Linux package for the machine's architecture. The retired `DBRepair.sh` and earlier custom SQLite/FTS routines are not used. **The DBRepair binary is not included in this Docker image.**
 
